@@ -1,0 +1,109 @@
+package krelp.ops;
+
+import krelp.manifest.Manifest;
+import krelp.source.Git;
+import krelp.util.Fs;
+import krelp.util.KrelpException;
+import krelp.util.Shell;
+import std.io.Files;
+import std.io.IOException;
+import std.io.Path;
+
+final class Scaffold {
+    private Scaffold() {}
+
+    static void create(String dir, String name, boolean library) throws KrelpException {
+        String? problem = Manifest.checkName(name);
+        if (problem != null) {
+            throw new KrelpException(problem, "choose a name like `my_app`, or pass `--name`");
+        }
+        if (Files.exists(Path.join(dir, Manifest.FILE))) {
+            throw new KrelpException("`$dir` already holds a package");
+        }
+        String src = Path.join(dir, "src");
+        try {
+            Fs.write(
+                Path.join(dir, Manifest.FILE),
+                "[package]\nname = \"$name\"\nversion = \"0.1.0\"\n\n[dependencies]\n"
+            );
+            if (library) {
+                String type = Scaffold.typeName(name);
+                Fs.write(Path.join(src, "$type.kr"), Scaffold.librarySource(name, type));
+            } else {
+                Fs.write(Path.join(src, "Main.kr"), Scaffold.programSource(name));
+            }
+            String ignore = Path.join(dir, ".gitignore");
+            if (!Files.exists(ignore)) {
+                Fs.write(ignore, "/target\n");
+            }
+        } catch (IOException e) {
+            throw new KrelpException(e.getMessage() ?: "couldn't write the files of `$name`");
+        }
+        if (Git.tryRun(dir, "rev-parse", "--is-inside-work-tree") == null) {
+            Git.tryRun(dir, "init", "--quiet");
+        }
+        Shell.status("Created", "${library ? "library" : "program"} `$name`");
+    }
+
+    static String nameOf(String dir) {
+        String base = Path.fileName(dir);
+        try {
+            base = Path.fileName(Files.canonicalPath(dir));
+        } catch (IOException e) {}
+        return base.replace("-", "_").toLowerCase();
+    }
+
+    private static String typeName(String name) {
+        StringBuilder out = new StringBuilder();
+        boolean upper = true;
+        for (char c : name.chars()) {
+            if (c == '_') {
+                upper = true;
+            } else if (upper) {
+                out.append(String.valueOf(c).toUpperCase());
+                upper = false;
+            } else {
+                out.append(c);
+            }
+        }
+        String type = out.toString();
+        return type.isEmpty() || type == "Main" ? "Library" : type;
+    }
+
+    private static String programSource(String name) {
+        return "package $name;\n"
+            + "\n"
+            + "class Main {\n"
+            + "    static void main(String[] args) {\n"
+            + "        Console.println(\"Hello, world!\");\n"
+            + "    }\n"
+            + "}\n";
+    }
+
+    private static String librarySource(String name, String type) {
+        return "package $name;\n"
+            + "\n"
+            + "/** The entry point of the `$name` library. */\n"
+            + "final class $type {\n"
+            + "    private $type() {}\n"
+            + "\n"
+            + "    /**\n"
+            + "     * Adds two numbers.\n"
+            + "     *\n"
+            + "     * @param a the first number\n"
+            + "     * @param b the second number\n"
+            + "     * @return their sum\n"
+            + "     */\n"
+            + "    static int add(int a, int b) {\n"
+            + "        return a + b;\n"
+            + "    }\n"
+            + "\n"
+            + "    @Test\n"
+            + "    static void addsNumbers() {\n"
+            + "        if ($type.add(2, 2) != 4) {\n"
+            + "            throw new IllegalStateException(\"2 + 2 is not 4\");\n"
+            + "        }\n"
+            + "    }\n"
+            + "}\n";
+    }
+}

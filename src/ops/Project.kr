@@ -1,0 +1,81 @@
+package krelp.ops;
+
+import krelp.lock.Lockfile;
+import krelp.manifest.Manifest;
+import krelp.resolve.Resolution;
+import krelp.resolve.Resolver;
+import krelp.source.Index;
+import krelp.util.KrelpException;
+import std.io.Files;
+import std.io.IOException;
+import std.io.Path;
+import std.util.ArrayList;
+import std.util.List;
+
+final class Project {
+    private Manifest manifest;
+    private Resolution resolution;
+
+    private Project(Manifest manifest, Resolution resolution) {
+        this.manifest = manifest;
+        this.resolution = resolution;
+    }
+
+    static Manifest find() throws KrelpException {
+        String start = System.workingDirectory();
+        String dir = start;
+        while (true) {
+            if (Files.isFile(Path.join(dir, Manifest.FILE))) {
+                return Manifest.read(dir);
+            }
+            String parent = Path.parent(dir);
+            if (parent.isEmpty() || parent == dir) {
+                throw new KrelpException(
+                    "couldn't find `${Manifest.FILE}` in `$start` or any directory above it",
+                    "run `krelp new NAME` to create a package"
+                );
+            }
+            dir = parent;
+        }
+    }
+
+    static Project load(&LockOptions options) throws KrelpException {
+        return Project.resolve(Project.find(), options);
+    }
+
+    static Project resolve(Manifest manifest, &LockOptions options) throws KrelpException {
+        Lockfile? lock = Lockfile.read(manifest.dir());
+        String? before = lock?.toToml();
+        Index index = new Index(Index.configured());
+        Resolver resolver = new Resolver(lock, options.updateAll(), options.update(), index);
+        Resolution resolution = resolver.resolve(&manifest);
+        resolution.fetch();
+        Lockfile after = resolution.lockfile();
+        if (options.locked() && (before == null || before != after.toToml())) {
+            throw new KrelpException(
+                "`${Lockfile.FILE}` needs to change, but `--locked` forbids it",
+                "run the command without `--locked` to update it"
+            );
+        }
+        after.write(manifest.dir());
+        return new Project(manifest, resolution);
+    }
+
+    &Manifest manifest() {
+        return &this.manifest;
+    }
+
+    &Resolution resolution() {
+        return &this.resolution;
+    }
+
+    String targetDir(String name) throws KrelpException {
+        String dir = Path.join(Path.join(this.manifest.dir(), "target"), name);
+        try {
+            Files.createDirectories(dir);
+        } catch (IOException e) {
+            throw new KrelpException(e.getMessage() ?: "couldn't create `$dir`");
+        }
+        return dir;
+    }
+}

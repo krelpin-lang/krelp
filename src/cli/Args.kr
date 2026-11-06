@@ -1,0 +1,102 @@
+package krelp.cli;
+
+import krelp.util.KrelpException;
+import std.util.ArrayList;
+import std.util.List;
+
+final class Args {
+    private List<String> items;
+    private List<String> passthrough;
+
+    Args(&String[] argv, int start) {
+        this.items = new ArrayList<>();
+        this.passthrough = new ArrayList<>();
+        boolean rest = false;
+        for (int i = start; i < argv.length; i++) {
+            if (rest) {
+                this.passthrough.add(argv[i]);
+            } else if (argv[i] == "--") {
+                rest = true;
+            } else {
+                this.items.add(argv[i]);
+            }
+        }
+    }
+
+    mut boolean flag(String... names) {
+        boolean found = false;
+        int i = 0;
+        while (i < this.items.size()) {
+            if (Args.isOneOf(this.items.get(i), &names)) {
+                this.items.remove(i);
+                found = true;
+            } else {
+                i++;
+            }
+        }
+        return found;
+    }
+
+    mut String? option(String name) throws KrelpException {
+        String? value = null;
+        int i = 0;
+        while (i < this.items.size()) {
+            String item = this.items.get(i);
+            String? attached = item.stripPrefix("$name=");
+            if (attached != null) {
+                value = attached;
+                this.items.remove(i);
+            } else if (item == name) {
+                if (i + 1 >= this.items.size()) {
+                    throw new KrelpException("`$name` needs a value");
+                }
+                value = this.items.get(i + 1);
+                this.items.remove(i);
+                this.items.remove(i);
+            } else {
+                i++;
+            }
+        }
+        return value;
+    }
+
+    mut List<String> positionals() {
+        List<String> found = new ArrayList<>();
+        int i = 0;
+        while (i < this.items.size()) {
+            String item = this.items.get(i);
+            if (!item.startsWith("-") || item == "-") {
+                found.add(item);
+                this.items.remove(i);
+            } else {
+                i++;
+            }
+        }
+        return found;
+    }
+
+    &List<String> passthrough() {
+        return &this.passthrough;
+    }
+
+    void finish(String command) throws KrelpException {
+        if (!this.items.isEmpty()) {
+            String item = this.items.get(0);
+            throw new KrelpException(
+                item.startsWith("-")
+                    ? "`krelp $command` has no option `$item`"
+                    : "`krelp $command` does not take the argument `$item`",
+                "run `krelp help $command` to see what it takes"
+            );
+        }
+    }
+
+    private static boolean isOneOf(&String item, &String[] names) {
+        for (int i = 0; i < names.length; i++) {
+            if (names[i] == item) {
+                return true;
+            }
+        }
+        return false;
+    }
+}

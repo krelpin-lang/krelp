@@ -1,0 +1,172 @@
+package krelp.resolve;
+
+import krelp.lock.LockedPackage;
+import krelp.lock.Lockfile;
+import krelp.manifest.Dependency;
+import krelp.manifest.Manifest;
+import krelp.source.Git;
+import krelp.source.SourceId;
+import krelp.util.Fs;
+import krelp.util.KrelpException;
+import krelp.util.Shell;
+import std.io.Path;
+import std.util.ArrayList;
+import std.util.List;
+
+final class Resolution {
+    private List<Node> nodes;
+
+    Resolution(List<Node> nodes) {
+        this.nodes = nodes;
+    }
+
+    &Node root() {
+        return this.nodes.get(0);
+    }
+
+    &List<Node> nodes() {
+        return &this.nodes;
+    }
+
+    (&Node)? find(&String name) {
+        for (&Node node : &this.nodes) {
+            if (node.name() == name) {
+                return node;
+            }
+        }
+        return null;
+    }
+
+    mut void fetch() throws KrelpException {
+        for (int i = 1; i < this.nodes.size(); i++) {
+            if (!this.nodes.get(i).dir().isEmpty()) {
+                continue;
+            }
+            String name = this.nodes.get(i).name();
+            String? repository = this.nodes.get(i).repository();
+            String? commit = this.nodes.get(i).commit();
+            if (repository == null || commit == null) {
+                continue;
+            }
+            if (!Git.isCheckedOut(repository, commit)) {
+                Shell.status("Downloading", this.nodes.get(i).toString());
+            }
+            String dir = Git.checkout(repository, commit);
+            Manifest manifest = Manifest.read(dir);
+            if (manifest.name() != name || manifest.version() != this.nodes.get(i).version()) {
+                throw new KrelpException(
+                    "the registry says `$repository` holds `$name` v${this.nodes.get(i).version()} "
+                    + "at commit $commit, but it holds `${manifest.name()}` v${manifest.version()}"
+                );
+            }
+            this.nodes.getMut(i).setDir(dir);
+        }
+    }
+
+    List<Library> libraries(boolean dev) {
+        List<String> reached = new ArrayList<>();
+        this.reach(this.root(), dev, &mut reached);
+        List<Library> libraries = new ArrayList<>();
+        for (&String name : &reached) {
+            (&Node)? node = this.find(name);
+            if (node != null) {
+                libraries.add(new Library(node.name(), Path.join(node.dir(), "src")));
+            }
+        }
+        return libraries;
+    }
+
+    Lockfile lockfile() {
+        List<LockedPackage> packages = new ArrayList<>();
+        String rootDir = this.root().dir();
+        for (int i = 1; i < this.nodes.size(); i++) {
+            &Node node = this.nodes.get(i);
+            List<String> deps = new ArrayList<>();
+            for (&Dependency dep : node.dependencies()) {
+                deps.add(dep.name());
+            }
+            deps.sort();
+            SourceId source = switch (node.source()) {
+                case Path(String dir) -> SourceId.Path(Fs.relative(rootDir, dir));
+                default -> node.source();
+            };
+            packages.add(new LockedPackage(node.name(), node.version(), source, node.commit(), deps));
+        }
+        packages.sort((a, b) -> a.name().compareTo(&b.name()));
+        return new Lockfile(packages);
+    }
+
+    String tree() {
+        StringBuilder out = new StringBuilder();
+        &Node root = this.root();
+        out.appendLine(root.toString());
+        List<String> seen = new ArrayList<>();
+        List<String> normal = new ArrayList<>();
+        List<String> dev = new ArrayList<>();
+        for (&Dependency dep : root.dependencies()) {
+            if (dep.dev()) {
+                dev.add(dep.name());
+            } else {
+                normal.add(dep.name());
+            }
+        }
+        this.branches(&mut out, &normal, "", &mut seen);
+        if (!dev.isEmpty()) {
+            out.appendLine("");
+            out.appendLine("[dev-dependencies]");
+            this.branches(&mut out, &dev, "", &mut seen);
+        }
+        return out.toString();
+    }
+
+    private void branches(&mut StringBuilder out, &List<String> names, String indent, &mut List<String> seen) {
+        for (int i = 0; i < names.size(); i++) {
+            boolean last = i == names.size() - 1;
+            (&Node)? node = this.find(names.get(i));
+            if (node == null) {
+                continue;
+            }
+            String origin = switch (node.source()) {
+                case Path(String dir) -> Fs.relative(this.root().dir(), dir);
+                default -> node.source().describe();
+            };
+            String shown = origin.isEmpty() ? node.toString() : "${node} ($origin)";
+            boolean again = Resolution.contains(seen, &node.name());
+            out.appendLine("$indent${last ? "└── " : "├── "}$shown${again ? " (*)" : ""}");
+            if (again) {
+                continue;
+            }
+            seen.add(node.name());
+            List<String> children = new ArrayList<>();
+            for (&Dependency dep : node.dependencies()) {
+                children.add(dep.name());
+            }
+            this.branches(out, &children, indent + (last ? "    " : "│   "), seen);
+        }
+    }
+
+    private void reach(&Node node, boolean dev, &mut List<String> reached) {
+        for (&Dependency dep : node.dependencies()) {
+            if (dep.dev() && !dev) {
+                continue;
+            }
+            if (Resolution.contains(reached, &dep.name())) {
+                continue;
+            }
+            reached.add(dep.name());
+            (&Node)? child = this.find(&dep.name());
+            if (child != null) {
+                this.reach(child, false, reached);
+            }
+        }
+    }
+
+    private static boolean contains(&List<String> names, &String name) {
+        for (&String other : names) {
+            if (other == name) {
+                return true;
+            }
+        }
+        return false;
+    }
+}

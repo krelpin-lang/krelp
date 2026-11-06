@@ -1,0 +1,134 @@
+package krelp.ops;
+
+import krelp.build.Profile;
+import krelp.manifest.Dependency;
+import krelp.manifest.Manifest;
+import krelp.source.Git;
+import krelp.source.Index;
+import krelp.source.IndexEntry;
+import krelp.util.Fs;
+import krelp.util.KrelpException;
+import krelp.util.Shell;
+import std.io.Files;
+import std.io.IOException;
+import std.util.ArrayList;
+import std.util.List;
+
+final class Publish {
+    private Publish() {}
+
+    static void run(boolean dryRun, boolean allowDirty) throws KrelpException {
+        Manifest manifest = Project.find();
+        String dir = manifest.dir();
+        String name = manifest.name();
+        if (manifest.isProgram()) {
+            throw new KrelpException(
+                "`$name` is a program; only libraries can be published",
+                "a library has no `src/Main.kr`"
+            );
+        }
+        List<Dependency> dependencies = new ArrayList<>();
+        for (&Dependency dep : manifest.dependencies()) {
+            if (dep.dev()) {
+                continue;
+            }
+            if (!dep.isRegistry()) {
+                throw new KrelpException(
+                    "`$name` depends on `${dep.name()}` by `path` or `git`, which others cannot fetch",
+                    "publish `${dep.name()}` to the registry and depend on it by version"
+                );
+            }
+            dependencies.add(dep.copy());
+        }
+        if (Git.tryRun(dir, "rev-parse", "--is-inside-work-tree") == null) {
+            throw new KrelpException("`$dir` is not in a git repository, which is where the registry finds its code");
+        }
+        String status = Git.run(dir, "status", "--porcelain", "--untracked-files=no", ".");
+        if (!status.trim().isEmpty() && !allowDirty) {
+            throw new KrelpException(
+                "`$name` has changes that are not committed:\n${status.trimEnd()}",
+                "commit them first, or pass `--allow-dirty` to publish the last commit anyway"
+            );
+        }
+        if (!Publish.atRepositoryRoot(dir)) {
+            throw new KrelpException(
+                "`$dir` is not the root of its git repository",
+                "the registry expects `${Manifest.FILE}` at the root of the repository"
+            );
+        }
+        String commit = Git.run(dir, "rev-parse", "HEAD").trim();
+        String repository = Publish.repository(&manifest);
+        String remote = Git.tryRun(dir, "branch", "--remotes", "--contains", commit) ?: "";
+        if (remote.trim().isEmpty()) {
+            throw new KrelpException(
+                "the commit $commit is not on any remote branch, so others cannot fetch it",
+                "push it first"
+            );
+        }
+
+        Index index = new Index(Index.configured());
+        index.update();
+        for (&IndexEntry entry : &index.versions(name)) {
+            if (entry.version() == manifest.version()) {
+                throw new KrelpException(
+                    "`$name` v${entry.version()} is already in the registry",
+                    "raise `version` in `${Manifest.FILE}` to publish a new version"
+                );
+            }
+        }
+        Shell.status("Verifying", "${name} v${manifest.version()}");
+        Project project = Project.resolve(manifest, &new LockOptions(false, false, new ArrayList<>()));
+        Builder.check(&project, Profile.DEBUG);
+
+        IndexEntry entry = new IndexEntry(name, project.manifest().version(), repository, commit, dependencies, false);
+        String section = entry.toToml();
+        if (dryRun) {
+            Shell.status("Skipping", "the upload of this entry because of `--dry-run`:");
+            Console.print(section);
+            return;
+        }
+        String file = index.file(name);
+        try {
+            String existing = Files.isFile(file) ? Files.readString(file) : "";
+            String separator = existing.isEmpty() || existing.endsWith("\n\n") ? "" : existing.endsWith("\n") ? "\n" : "\n\n";
+            Fs.write(file, existing + separator + section);
+        } catch (IOException e) {
+            throw new KrelpException(e.getMessage() ?: "couldn't write `$file`");
+        }
+        String message = "publish $name v${project.manifest().version()}";
+        Git.run(index.dir(), "add", file);
+        Git.run(index.dir(), "commit", "--quiet", "-m", message);
+        Shell.status("Uploading", "$name v${project.manifest().version()} to ${index.url()}");
+        if (Git.tryRun(index.dir(), "push", "--quiet", "origin", "HEAD") == null) {
+            throw new KrelpException(
+                "couldn't push the registry index ${index.url()}",
+                "the entry is committed in `${index.dir()}`; push it yourself, or open a pull request with it"
+            );
+        }
+        Shell.status("Published", "$name v${project.manifest().version()}");
+    }
+
+    private static boolean atRepositoryRoot(String dir) throws KrelpException {
+        String top = Git.run(dir, "rev-parse", "--show-toplevel").trim();
+        try {
+            return Files.canonicalPath(top) == Files.canonicalPath(dir);
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private static String repository(&Manifest manifest) throws KrelpException {
+        String? configured = manifest.repository();
+        if (configured != null) {
+            return configured;
+        }
+        String? origin = Git.tryRun(manifest.dir(), "remote", "get-url", "origin");
+        if (origin == null || origin.trim().isEmpty()) {
+            throw new KrelpException(
+                "couldn't tell where others can fetch `${manifest.name()}` from",
+                "set `repository` in `[package]`, or add a git remote named `origin`"
+            );
+        }
+        return origin.trim();
+    }
+}

@@ -1,0 +1,7 @@
+[package]
+name = "krelp"
+version = "0.1.0"
+description = "The Krelpin package manager"
+license = "MIT"
+
+[dependencies]

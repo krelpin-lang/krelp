@@ -1,0 +1,19 @@
+package krelp.build;
+
+enum Profile {
+    DEBUG, RELEASE;
+
+    String dirName() {
+        return switch (this) {
+            case DEBUG -> "debug";
+            case RELEASE -> "release";
+        };
+    }
+
+    String describe() {
+        return switch (this) {
+            case DEBUG -> "debug build";
+            case RELEASE -> "optimized release build";
+        };
+    }
+}

@@ -1,0 +1,6 @@
+package krelp.resolve;
+
+import krelp.semver.VersionReq;
+import krelp.source.SourceId;
+
+record Demand(String from, String name, SourceId source, VersionReq req) {}

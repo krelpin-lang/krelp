@@ -1,0 +1,70 @@
+package krelp.resolve;
+
+import krelp.manifest.Dependency;
+import krelp.semver.Version;
+import krelp.source.SourceId;
+import std.util.List;
+
+final class Node {
+    private String name;
+    private Version version;
+    private SourceId source;
+    private String? commit;
+    private String? repository;
+    private String dir;
+    private List<Dependency> dependencies;
+
+    Node(
+        String name,
+        Version version,
+        SourceId source,
+        String? commit,
+        String? repository,
+        String dir,
+        List<Dependency> dependencies
+    ) {
+        this.name = name;
+        this.version = version;
+        this.source = source;
+        this.commit = commit;
+        this.repository = repository;
+        this.dir = dir;
+        this.dependencies = dependencies;
+    }
+
+    String name() {
+        return this.name;
+    }
+
+    Version version() {
+        return this.version;
+    }
+
+    SourceId source() {
+        return this.source;
+    }
+
+    String? commit() {
+        return this.commit;
+    }
+
+    String? repository() {
+        return this.repository;
+    }
+
+    String dir() {
+        return this.dir;
+    }
+
+    mut void setDir(String dir) {
+        this.dir = dir;
+    }
+
+    &List<Dependency> dependencies() {
+        return &this.dependencies;
+    }
+
+    String toString() {
+        return "${this.name} v${this.version}";
+    }
+}

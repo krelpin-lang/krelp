@@ -1,0 +1,5 @@
+package krelp.ops;
+
+import std.util.List;
+
+record LockOptions(boolean locked, boolean updateAll, List<String> update) {}

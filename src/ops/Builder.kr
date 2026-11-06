@@ -1,0 +1,162 @@
+package krelp.ops;
+
+import krelp.build.Compiler;
+import krelp.build.Goal;
+import krelp.build.Profile;
+import krelp.manifest.Manifest;
+import krelp.resolve.Library;
+import krelp.resolve.Node;
+import krelp.util.KrelpException;
+import krelp.util.Shell;
+import std.io.Files;
+import std.io.IOException;
+import std.io.Path;
+import std.process.Command;
+import std.util.ArrayList;
+import std.util.List;
+
+final class Builder {
+    private Builder() {}
+
+    static void check(&Project project, Profile profile) throws KrelpException {
+        long start = System.currentTimeMillis();
+        Builder.compile(project, Goal.CHECK, profile, "");
+        Builder.finished(profile, start);
+    }
+
+    static String build(&Project project, Profile profile) throws KrelpException {
+        long start = System.currentTimeMillis();
+        String output = Builder.compile(project, Goal.BUILD, profile, Builder.artifact(project, profile));
+        Builder.finished(profile, start);
+        return output;
+    }
+
+    static int run(&Project project, Profile profile, &List<String> args) throws KrelpException {
+        &Manifest manifest = project.manifest();
+        if (!manifest.isProgram()) {
+            throw new KrelpException(
+                "`${manifest.name()}` is a library, so there is nothing to run",
+                "a program has a `src/Main.kr` with `static void main(String[] args)`"
+            );
+        }
+        String program = Builder.build(project, profile);
+        Command command = new Command(program);
+        for (&String arg : args) {
+            command.arg(arg);
+        }
+        Shell.status("Running", Builder.shown(project, program));
+        try {
+            return command.status();
+        } catch (IOException e) {
+            throw new KrelpException(e.getMessage() ?: "couldn't run `$program`");
+        }
+    }
+
+    static void test(&Project project, Profile profile) throws KrelpException {
+        &Manifest manifest = project.manifest();
+        long start = System.currentTimeMillis();
+        String dir = project.targetDir(profile.dirName());
+        List<String> programs = new ArrayList<>();
+        programs.add(Builder.compile(
+            project, Goal.UNIT_TESTS, profile, Path.join(dir, "${manifest.name()}-unittests")
+        ));
+        if (Builder.hasSources(manifest.testsDir())) {
+            programs.add(Builder.compile(
+                project, Goal.INTEGRATION_TESTS, profile, Path.join(dir, "${manifest.name()}-tests")
+            ));
+        }
+        Builder.finished(profile, start);
+        int failed = 0;
+        for (&String program : &programs) {
+            Shell.status("Running", Builder.shown(project, program));
+            try {
+                if (new Command(program).status() != 0) {
+                    failed++;
+                }
+            } catch (IOException e) {
+                throw new KrelpException(e.getMessage() ?: "couldn't run `$program`");
+            }
+        }
+        if (failed > 0) {
+            throw new KrelpException(failed == 1 ? "a test program failed" : "$failed test programs failed");
+        }
+    }
+
+    private static String compile(&Project project, Goal goal, Profile profile, String output)
+        throws KrelpException {
+        &Manifest manifest = project.manifest();
+        boolean dev = goal == Goal.UNIT_TESTS || goal == Goal.INTEGRATION_TESTS;
+        List<Library> libraries = project.resolution().libraries(dev);
+        String crate = manifest.name();
+        String input = manifest.srcDir();
+        if (goal == Goal.INTEGRATION_TESTS) {
+            libraries.add(new Library(manifest.name(), manifest.srcDir()));
+            crate = "tests";
+            input = manifest.testsDir();
+        }
+        if (!Builder.hasSources(manifest.srcDir())) {
+            throw new KrelpException(
+                "`${manifest.srcDir()}` holds no `.kr` files",
+                "put the sources of `${manifest.name()}` in `src`"
+            );
+        }
+        for (&Library library : &libraries) {
+            if (goal == Goal.INTEGRATION_TESTS && library.name() == manifest.name()) {
+                continue;
+            }
+            Shell.status("Compiling", Builder.describe(project, library.name()));
+        }
+        String verb = goal == Goal.CHECK ? "Checking" : "Compiling";
+        String what = goal == Goal.INTEGRATION_TESTS ? "tests" : "${manifest.name()} v${manifest.version()}";
+        Shell.status(verb, "$what (${manifest.dir()})");
+        Compiler compiler = new Compiler(crate, input, manifest.edition(), libraries);
+        boolean library = !manifest.isProgram();
+        if (!compiler.run(goal, profile, library, output)) {
+            throw new KrelpException("couldn't compile `${manifest.name()}` because of the errors above");
+        }
+        return output;
+    }
+
+    private static String artifact(&Project project, Profile profile) throws KrelpException {
+        &Manifest manifest = project.manifest();
+        String dir = project.targetDir(profile.dirName());
+        String name = manifest.isProgram() ? manifest.name() : "lib${manifest.name()}.rlib";
+        return Path.join(dir, name);
+    }
+
+    private static String describe(&Project project, String name) {
+        (&Node)? node = project.resolution().find(&name);
+        return node == null ? name : node.toString();
+    }
+
+    private static void finished(Profile profile, long start) {
+        long millis = System.currentTimeMillis() - start;
+        long tenths = millis / 10L;
+        Shell.status("Finished", "${profile.describe()} in ${tenths / 100L}.${(tenths % 100L).format("02")}s");
+    }
+
+    private static String shown(&Project project, String program) {
+        String? inside = program.stripPrefix("${project.manifest().dir()}/");
+        return inside ?: program;
+    }
+
+    private static boolean hasSources(String dir) {
+        if (!Files.isDirectory(dir)) {
+            return false;
+        }
+        try {
+            for (String name : Files.list(dir)) {
+                String path = Path.join(dir, name);
+                if (name.endsWith(".kr") && Files.isFile(path)) {
+                    return true;
+                }
+                if (Files.isDirectory(path) && Builder.hasSources(path)) {
+                    return true;
+                }
+            }
+        } catch (IOException e) {
+            return false;
+        }
+        return false;
+    }
+}

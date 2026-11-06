@@ -1,0 +1,68 @@
+package krelp.build;
+
+import krelp.resolve.Library;
+import krelp.util.KrelpException;
+import std.io.IOException;
+import std.process.Command;
+import std.util.List;
+
+final class Compiler {
+    private String program;
+    private String crateName;
+    private String input;
+    private String? edition;
+    private List<Library> libraries;
+
+    Compiler(String crateName, String input, String? edition, List<Library> libraries) {
+        this.program = Compiler.program();
+        this.crateName = crateName;
+        this.input = input;
+        this.edition = edition;
+        this.libraries = libraries;
+    }
+
+    static String program() {
+        String? configured = System.env("KRELPINC");
+        return configured != null && !configured.isEmpty() ? configured : "krelpinc";
+    }
+
+    boolean run(Goal goal, Profile profile, boolean library, String output) throws KrelpException {
+        Command command = new Command(this.program);
+        command.args("--crate-name", this.crateName);
+        String? edition = this.edition;
+        if (edition != null) {
+            command.args("--edition", edition);
+        }
+        for (&Library dep : &this.libraries) {
+            command.args("--dep", "${dep.name()}=${dep.src()}");
+        }
+        switch (profile) {
+            case DEBUG -> command.arg("-g");
+            case RELEASE -> command.arg("-O");
+        }
+        switch (goal) {
+            case CHECK -> {
+                if (library) {
+                    command.args("--crate-type", "lib");
+                }
+                command.args("--emit", "metadata");
+            }
+            case BUILD -> {
+                if (library) {
+                    command.args("--crate-type", "lib");
+                }
+                command.args("-o", output);
+            }
+            case UNIT_TESTS, INTEGRATION_TESTS -> command.args("--test", "-o", output);
+        }
+        command.arg(this.input);
+        try {
+            return command.status() == 0;
+        } catch (IOException e) {
+            throw new KrelpException(
+                "couldn't run the compiler `${this.program}`: ${e.getMessage() ?: ""}",
+                "install krelpinc on the PATH, or set KRELPINC to its path"
+            );
+        }
+    }
+}

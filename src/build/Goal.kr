@@ -1,0 +1,8 @@
+package krelp.build;
+
+enum Goal {
+    CHECK,
+    BUILD,
+    UNIT_TESTS,
+    INTEGRATION_TESTS
+}

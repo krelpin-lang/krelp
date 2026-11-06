@@ -1,0 +1,102 @@
+package krelp.ops;
+
+import krelp.manifest.Dependency;
+import krelp.manifest.Manifest;
+import krelp.manifest.ManifestEditor;
+import krelp.semver.Version;
+import krelp.source.Index;
+import krelp.source.IndexEntry;
+import krelp.util.KrelpException;
+import krelp.util.Shell;
+import std.io.Files;
+import std.io.IOException;
+import std.util.ArrayList;
+import std.util.List;
+
+final class Edit {
+    private Edit() {}
+
+    static void add(Manifest manifest, Dependency dependency) throws KrelpException {
+        String value = dependency.toToml();
+        if (dependency.isRegistry() && dependency.req().toString() == "*") {
+            Version newest = Edit.newest(dependency.name());
+            value = "\"$newest\"";
+        }
+        String section = dependency.dev() ? "dev-dependencies" : "dependencies";
+        String other = dependency.dev() ? "dependencies" : "dev-dependencies";
+        String original = Edit.read(&manifest);
+        ManifestEditor editor = new ManifestEditor(original);
+        editor.remove(other, dependency.name());
+        editor.set(section, dependency.name(), value);
+        Shell.status("Adding", "${dependency.name()} = $value to [$section]");
+        Edit.apply(manifest, original, editor.text());
+    }
+
+    static void remove(Manifest manifest, &List<String> names, boolean dev) throws KrelpException {
+        String original = Edit.read(&manifest);
+        ManifestEditor editor = new ManifestEditor(original);
+        for (&String name : names) {
+            boolean removed = editor.remove("dev-dependencies", name);
+            if (!dev) {
+                removed = editor.remove("dependencies", name) || removed;
+            }
+            if (!removed) {
+                throw new KrelpException(
+                    "`${manifest.name()}` has no ${dev ? "dev-dependency" : "dependency"} named `$name`"
+                );
+            }
+            Shell.status("Removing", name);
+        }
+        Edit.apply(manifest, original, editor.text());
+    }
+
+    private static Version newest(String name) throws KrelpException {
+        Index index = new Index(Index.configured());
+        index.update();
+        Version? best = null;
+        for (&IndexEntry entry : &index.versions(name)) {
+            if (entry.yanked() || entry.version().isPrerelease()) {
+                continue;
+            }
+            if (best == null || entry.version().compareTo(&best) > 0) {
+                best = entry.version();
+            }
+        }
+        if (best == null) {
+            throw new KrelpException(
+                "the registry has no version of `$name`",
+                "check the name, or add it with `--path` or `--git`"
+            );
+        }
+        return best;
+    }
+
+    private static String read(&Manifest manifest) throws KrelpException {
+        try {
+            return Files.readString(manifest.file());
+        } catch (IOException e) {
+            throw new KrelpException(e.getMessage() ?: "couldn't read `${manifest.file()}`");
+        }
+    }
+
+    private static void apply(Manifest manifest, String original, String edited) throws KrelpException {
+        String file = manifest.file();
+        String dir = manifest.dir();
+        Edit.write(file, edited);
+        try {
+            Manifest changed = Manifest.read(dir);
+            Project.resolve(changed, &new LockOptions(false, false, new ArrayList<>()));
+        } catch (KrelpException e) {
+            Edit.write(file, original);
+            throw e;
+        }
+    }
+
+    private static void write(String file, String text) throws KrelpException {
+        try {
+            Files.writeString(file, text);
+        } catch (IOException e) {
+            throw new KrelpException(e.getMessage() ?: "couldn't write `$file`");
+        }
+    }
+}

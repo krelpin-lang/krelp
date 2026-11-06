@@ -1,0 +1,3 @@
+package krelp.resolve;
+
+record Library(String name, String src) {}
