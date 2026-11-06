@@ -1,0 +1,123 @@
+package krelp.manifest;
+
+import std.util.ArrayList;
+import std.util.List;
+
+final class ManifestEditor {
+    private List<String> lines;
+
+    ManifestEditor(String text) {
+        this.lines = new ArrayList<>();
+        for (String line : text.lines()) {
+            this.lines.add(line);
+        }
+    }
+
+    mut void set(String section, String name, String value) {
+        this.remove(section, name);
+        String entry = "$name = $value";
+        int header = this.findHeader("[$section]");
+        if (header < 0) {
+            if (!this.lines.isEmpty() && !this.lines.get(this.lines.size() - 1).isBlank()) {
+                this.lines.add("");
+            }
+            this.lines.add("[$section]");
+            this.lines.add(entry);
+            return;
+        }
+        int end = this.sectionEnd(header);
+        int insert = end;
+        while (insert > header + 1 && this.isFiller(this.lines.get(insert - 1))) {
+            insert--;
+        }
+        this.lines.add(insert, entry);
+    }
+
+    mut boolean remove(String section, String name) {
+        boolean removed = false;
+        int table = this.findHeader("[$section.$name]");
+        if (table >= 0) {
+            int end = this.sectionEnd(table);
+            for (int i = end - 1; i >= table; i--) {
+                this.lines.remove(i);
+            }
+            removed = true;
+        }
+        int header = this.findHeader("[$section]");
+        if (header < 0) {
+            return removed;
+        }
+        int i = header + 1;
+        while (i < this.sectionEnd(header)) {
+            if (ManifestEditor.keyOf(this.lines.get(i)) == name) {
+                this.lines.remove(i);
+                removed = true;
+            } else {
+                i++;
+            }
+        }
+        return removed;
+    }
+
+    String text() {
+        StringBuilder out = new StringBuilder();
+        for (&String line : this.lines) {
+            out.append(line);
+            out.append('\n');
+        }
+        return out.toString();
+    }
+
+    private int findHeader(String header) {
+        for (int i = 0; i < this.lines.size(); i++) {
+            if (ManifestEditor.headerOf(this.lines.get(i)) == header) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private int sectionEnd(int header) {
+        for (int i = header + 1; i < this.lines.size(); i++) {
+            if (this.lines.get(i).trim().startsWith("[")) {
+                return i;
+            }
+        }
+        return this.lines.size();
+    }
+
+    private boolean isFiller(&String line) {
+        String trimmed = line.trim();
+        return trimmed.isEmpty() || trimmed.startsWith("#");
+    }
+
+    private static String headerOf(&String line) {
+        String trimmed = line.trim();
+        int hash = trimmed.indexOf("#");
+        if (hash >= 0) {
+            trimmed = trimmed.substring(0, hash).trim();
+        }
+        if (!trimmed.startsWith("[") || trimmed.startsWith("[[")) {
+            return "";
+        }
+        return trimmed.replace(" ", "").replace("\t", "");
+    }
+
+    private static String keyOf(&String line) {
+        String trimmed = line.trim();
+        StringBuilder key = new StringBuilder();
+        for (char c : trimmed.chars()) {
+            boolean bare = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                || (c >= '0' && c <= '9') || c == '_' || c == '-';
+            if (!bare) {
+                break;
+            }
+            key.append(c);
+        }
+        String rest = trimmed.substring(key.length()).trim();
+        if (rest.startsWith("=") || rest.startsWith(".")) {
+            return key.toString();
+        }
+        return "";
+    }
+}

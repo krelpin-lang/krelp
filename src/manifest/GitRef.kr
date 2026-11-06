@@ -1,0 +1,35 @@
+package krelp.manifest;
+
+enum GitRef {
+    DefaultBranch,
+    Branch(String name),
+    Tag(String name),
+    Rev(String rev);
+
+    String revision() {
+        return switch (this) {
+            case DefaultBranch -> "HEAD";
+            case Branch(String name) -> "refs/heads/$name";
+            case Tag(String name) -> "refs/tags/$name";
+            case Rev(String rev) -> rev;
+        };
+    }
+
+    String query() {
+        return switch (this) {
+            case DefaultBranch -> "";
+            case Branch(String name) -> "?branch=$name";
+            case Tag(String name) -> "?tag=$name";
+            case Rev(String rev) -> "?rev=$rev";
+        };
+    }
+
+    String toString() {
+        return switch (this) {
+            case DefaultBranch -> "the default branch";
+            case Branch(String name) -> "branch `$name`";
+            case Tag(String name) -> "tag `$name`";
+            case Rev(String rev) -> "commit `$rev`";
+        };
+    }
+}

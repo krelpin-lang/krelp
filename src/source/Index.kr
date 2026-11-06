@@ -1,0 +1,133 @@
+package krelp.source;
+
+import krelp.manifest.DepKind;
+import krelp.manifest.Dependency;
+import krelp.semver.SemverException;
+import krelp.semver.Version;
+import krelp.semver.VersionReq;
+import krelp.toml.TomlException;
+import krelp.toml.TomlParser;
+import krelp.toml.TomlTable;
+import krelp.toml.TomlValue;
+import krelp.util.Fs;
+import krelp.util.KrelpException;
+import krelp.util.Shell;
+import std.io.Files;
+import std.io.IOException;
+import std.io.Path;
+import std.util.ArrayList;
+import std.util.List;
+
+final class Index {
+    public static String DEFAULT = "https://github.com/krelpin-lang/registry.git";
+
+    private String url;
+    private String dir;
+    private boolean fresh;
+
+    Index(String url) {
+        this.url = url;
+        this.dir = Home.index(url);
+        this.fresh = false;
+    }
+
+    static String configured() {
+        String? url = System.env("KRELP_REGISTRY");
+        return url != null && !url.isEmpty() ? url : Index.DEFAULT;
+    }
+
+    String url() {
+        return this.url;
+    }
+
+    String dir() {
+        return this.dir;
+    }
+
+    boolean isFresh() {
+        return this.fresh;
+    }
+
+    mut void update() throws KrelpException {
+        if (this.fresh) {
+            return;
+        }
+        if (Files.isDirectory(Path.join(this.dir, ".git"))) {
+            Shell.status("Updating", "registry index ${this.url}");
+            Git.run(this.dir, "fetch", "--quiet", "origin");
+            Git.run(this.dir, "reset", "--quiet", "--hard", "FETCH_HEAD");
+        } else {
+            Shell.status("Fetching", "registry index ${this.url}");
+            try {
+                Fs.removeAll(this.dir);
+                Files.createDirectories(Path.parent(this.dir));
+            } catch (IOException e) {
+                throw new KrelpException(e.getMessage() ?: "couldn't create `${this.dir}`");
+            }
+            Git.run("", "clone", "--quiet", this.url, this.dir);
+        }
+        this.fresh = true;
+    }
+
+    mut List<IndexEntry> versions(String name) throws KrelpException {
+        if (!Files.isDirectory(Path.join(this.dir, ".git"))) {
+            this.update();
+        }
+        String file = this.file(name);
+        List<IndexEntry> entries = new ArrayList<>();
+        if (!Files.isFile(file)) {
+            return entries;
+        }
+        try {
+            TomlTable root = TomlParser.parse(Files.readString(file), file);
+            (&List<TomlValue>)? versions = root.array("version");
+            if (versions == null) {
+                return entries;
+            }
+            for (&TomlValue value : versions) {
+                switch (value) {
+                    case Table(TomlTable table) -> entries.add(this.entry(name, &table, file));
+                    default -> throw new KrelpException("$file: `version` must be an array of tables");
+                }
+            }
+        } catch (IOException e) {
+            throw new KrelpException(e.getMessage() ?: "couldn't read `$file`");
+        } catch (TomlException e) {
+            throw new KrelpException(e.getMessage() ?: "`$file` is not valid TOML");
+        }
+        return entries;
+    }
+
+    String file(String name) {
+        return Path.join(Path.join(this.dir, "packages"), "$name.toml");
+    }
+
+    private IndexEntry entry(String name, &TomlTable table, String file) throws TomlException, KrelpException {
+        Version version;
+        try {
+            version = Version.parse(table.requireString("version"));
+        } catch (SemverException e) {
+            throw new KrelpException("$file: ${e.getMessage() ?: ""}");
+        }
+        List<Dependency> dependencies = new ArrayList<>();
+        (&TomlTable)? deps = table.table("dependencies");
+        if (deps != null) {
+            for (&String dep : deps.keys()) {
+                String req = deps.requireString(dep);
+                try {
+                    dependencies.add(new Dependency(dep, DepKind.Registry, VersionReq.parse(req), false));
+                } catch (SemverException e) {
+                    throw new KrelpException("$file: `${deps.qualify(dep)}`: ${e.getMessage() ?: ""}");
+                }
+            }
+        }
+        return new IndexEntry(
+            name,
+            version,
+            table.requireString("git"),
+            table.requireString("rev"),
+            dependencies,
+            table.bool("yanked", false)
+        );
+    }
+}

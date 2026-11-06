@@ -1,0 +1,139 @@
+package krelp.lock;
+
+import krelp.semver.SemverException;
+import krelp.semver.Version;
+import krelp.source.SourceId;
+import krelp.toml.TomlException;
+import krelp.toml.TomlParser;
+import krelp.toml.TomlTable;
+import krelp.toml.TomlValue;
+import krelp.toml.TomlWriter;
+import krelp.util.KrelpException;
+import std.io.Files;
+import std.io.IOException;
+import std.io.Path;
+import std.util.ArrayList;
+import std.util.List;
+
+final class Lockfile {
+    public static String FILE = "krelp.lock";
+
+    private List<LockedPackage> packages;
+
+    Lockfile(List<LockedPackage> packages) {
+        this.packages = packages;
+    }
+
+    &List<LockedPackage> packages() {
+        return &this.packages;
+    }
+
+    (&LockedPackage)? find(&String name) {
+        for (&LockedPackage locked : this.packages) {
+            if (locked.name() == name) {
+                return locked;
+            }
+        }
+        return null;
+    }
+
+    static Lockfile? read(String dir) throws KrelpException {
+        String file = Path.join(dir, Lockfile.FILE);
+        if (!Files.isFile(file)) {
+            return null;
+        }
+        try {
+            return Lockfile.parse(Files.readString(file), file);
+        } catch (IOException e) {
+            throw new KrelpException(e.getMessage() ?: "couldn't read `$file`");
+        }
+    }
+
+    static Lockfile parse(String text, String file) throws KrelpException {
+        List<LockedPackage> packages = new ArrayList<>();
+        try {
+            TomlTable root = TomlParser.parse(text, file);
+            long version = root.integer("version", 1L);
+            if (version != 1L) {
+                throw new KrelpException(
+                    "$file has version $version, which this krelp does not understand",
+                    "delete it to have krelp write a new one"
+                );
+            }
+            (&List<TomlValue>)? items = root.array("package");
+            if (items == null) {
+                return new Lockfile(packages);
+            }
+            for (&TomlValue item : items) {
+                switch (item) {
+                    case Table(TomlTable table) -> packages.add(Lockfile.entry(&table, file));
+                    default -> throw new KrelpException("$file: `package` must be an array of tables");
+                }
+            }
+        } catch (TomlException e) {
+            throw new KrelpException(
+                e.getMessage() ?: "`$file` is not valid TOML",
+                "delete it to have krelp write a new one"
+            );
+        }
+        return new Lockfile(packages);
+    }
+
+    void write(String dir) throws KrelpException {
+        String file = Path.join(dir, Lockfile.FILE);
+        String text = this.toToml();
+        try {
+            if (Files.isFile(file) && Files.readString(file) == text) {
+                return;
+            }
+            Files.writeString(file, text);
+        } catch (IOException e) {
+            throw new KrelpException(e.getMessage() ?: "couldn't write `$file`");
+        }
+    }
+
+    String toToml() {
+        StringBuilder out = new StringBuilder();
+        out.appendLine("# This file is written by krelp. Do not edit it by hand.");
+        out.appendLine("version = 1");
+        for (&LockedPackage locked : this.packages) {
+            out.appendLine("");
+            out.appendLine("[[package]]");
+            out.appendLine("name = ${TomlWriter.string(locked.name())}");
+            out.appendLine("version = ${TomlWriter.string(locked.version().toString())}");
+            out.appendLine("source = ${TomlWriter.string(locked.source().key())}");
+            String? commit = locked.commit();
+            if (commit != null) {
+                out.appendLine("commit = ${TomlWriter.string(commit)}");
+            }
+            if (!locked.dependencies().isEmpty()) {
+                StringBuilder deps = new StringBuilder();
+                for (&String dep : locked.dependencies()) {
+                    if (!deps.isEmpty()) {
+                        deps.append(", ");
+                    }
+                    deps.append(TomlWriter.string(dep));
+                }
+                out.appendLine("dependencies = [$deps]");
+            }
+        }
+        return out.toString();
+    }
+
+    private static LockedPackage entry(&TomlTable table, String file) throws TomlException, KrelpException {
+        String name = table.requireString("name");
+        Version version;
+        try {
+            version = Version.parse(table.requireString("version"));
+        } catch (SemverException e) {
+            throw new KrelpException("$file: `$name`: ${e.getMessage() ?: ""}");
+        }
+        return new LockedPackage(
+            name,
+            version,
+            SourceId.parse(table.requireString("source")),
+            table.string("commit"),
+            table.strings("dependencies")
+        );
+    }
+}

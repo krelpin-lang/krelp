@@ -1,0 +1,74 @@
+package krelp.source;
+
+import krelp.manifest.GitRef;
+import krelp.util.KrelpException;
+
+enum SourceId {
+    Root,
+    Path(String dir),
+    Git(String url, GitRef ref),
+    Registry(String index);
+
+    String key() {
+        return switch (this) {
+            case Root -> "root";
+            case Path(String dir) -> "path+$dir";
+            case Git(String url, GitRef ref) -> "git+$url${ref.query()}";
+            case Registry(String index) -> "registry+$index";
+        };
+    }
+
+    boolean isRegistry() {
+        return switch (this) {
+            case Registry(String index) -> true;
+            default -> false;
+        };
+    }
+
+    static SourceId parse(String key) throws KrelpException {
+        if (key == "root") {
+            return SourceId.Root;
+        }
+        String? dir = key.stripPrefix("path+");
+        if (dir != null) {
+            return SourceId.Path(dir);
+        }
+        String? index = key.stripPrefix("registry+");
+        if (index != null) {
+            return SourceId.Registry(index);
+        }
+        String? git = key.stripPrefix("git+");
+        if (git != null) {
+            int question = git.indexOf("?");
+            if (question < 0) {
+                return SourceId.Git(git, GitRef.DefaultBranch);
+            }
+            String url = git.substring(0, question);
+            String query = git.substring(question + 1);
+            int equals = query.indexOf("=");
+            if (equals > 0) {
+                String kind = query.substring(0, equals);
+                String value = query.substring(equals + 1);
+                if (kind == "branch") {
+                    return SourceId.Git(url, GitRef.Branch(value));
+                }
+                if (kind == "tag") {
+                    return SourceId.Git(url, GitRef.Tag(value));
+                }
+                if (kind == "rev") {
+                    return SourceId.Git(url, GitRef.Rev(value));
+                }
+            }
+        }
+        throw new KrelpException("`$key` is not a package source");
+    }
+
+    String describe() {
+        return switch (this) {
+            case Root -> "";
+            case Path(String dir) -> dir;
+            case Git(String url, GitRef ref) -> "$url${ref.query()}";
+            case Registry(String index) -> "";
+        };
+    }
+}

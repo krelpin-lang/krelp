@@ -1,0 +1,48 @@
+package krelp.source;
+
+import krelp.util.Hashes;
+import std.io.Path;
+
+final class Home {
+    private Home() {}
+
+    static String dir() {
+        String? home = System.env("KRELP_HOME");
+        if (home != null && !home.isEmpty()) {
+            return home;
+        }
+        return Path.join(System.env("HOME") ?: "/", ".krelp");
+    }
+
+    static String gitDb(String url) {
+        return Path.join(Path.join(Home.dir(), "git/db"), Home.name(url));
+    }
+
+    static String checkout(String url, String commit) {
+        String repo = Path.join(Path.join(Home.dir(), "git/checkouts"), Home.name(url));
+        return Path.join(repo, commit);
+    }
+
+    static String index(String url) {
+        return Path.join(Path.join(Home.dir(), "index"), Home.name(url));
+    }
+
+    private static String name(String url) {
+        String base = Path.fileName(url.endsWith("/") ? url.substring(0, url.length() - 1) : url);
+        String? stripped = base.stripSuffix(".git");
+        if (stripped != null) {
+            base = stripped;
+        }
+        StringBuilder safe = new StringBuilder();
+        for (char c : base.chars()) {
+            boolean ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                || (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
+            if (ok) {
+                safe.append(c);
+            } else {
+                safe.append('_');
+            }
+        }
+        return "${safe}-${Hashes.fnv64(url)}";
+    }
+}

@@ -1,0 +1,7 @@
+package krelp.manifest;
+
+enum DepKind {
+    Path(String dir),
+    Git(String url, GitRef ref),
+    Registry
+}

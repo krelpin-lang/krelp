@@ -1,0 +1,41 @@
+package krelp.lock;
+
+import krelp.semver.Version;
+import krelp.source.SourceId;
+import std.util.List;
+
+final class LockedPackage {
+    private String name;
+    private Version version;
+    private SourceId source;
+    private String? commit;
+    private List<String> dependencies;
+
+    LockedPackage(String name, Version version, SourceId source, String? commit, List<String> dependencies) {
+        this.name = name;
+        this.version = version;
+        this.source = source;
+        this.commit = commit;
+        this.dependencies = dependencies;
+    }
+
+    String name() {
+        return this.name;
+    }
+
+    &Version version() {
+        return &this.version;
+    }
+
+    &SourceId source() {
+        return &this.source;
+    }
+
+    String? commit() {
+        return this.commit;
+    }
+
+    &List<String> dependencies() {
+        return &this.dependencies;
+    }
+}

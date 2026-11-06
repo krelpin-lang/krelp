@@ -1,0 +1,66 @@
+package krelp.source;
+
+import krelp.manifest.Dependency;
+import krelp.semver.Version;
+import krelp.toml.TomlWriter;
+import std.util.List;
+
+final class IndexEntry {
+    private String name;
+    private Version version;
+    private String git;
+    private String rev;
+    private List<Dependency> dependencies;
+    private boolean yanked;
+
+    IndexEntry(String name, Version version, String git, String rev, List<Dependency> dependencies, boolean yanked) {
+        this.name = name;
+        this.version = version;
+        this.git = git;
+        this.rev = rev;
+        this.dependencies = dependencies;
+        this.yanked = yanked;
+    }
+
+    String name() {
+        return this.name;
+    }
+
+    &Version version() {
+        return &this.version;
+    }
+
+    String git() {
+        return this.git;
+    }
+
+    String rev() {
+        return this.rev;
+    }
+
+    &List<Dependency> dependencies() {
+        return &this.dependencies;
+    }
+
+    boolean yanked() {
+        return this.yanked;
+    }
+
+    String toToml() {
+        StringBuilder out = new StringBuilder();
+        out.appendLine("[[version]]");
+        out.appendLine("version = ${TomlWriter.string(this.version.toString())}");
+        out.appendLine("git = ${TomlWriter.string(this.git)}");
+        out.appendLine("rev = ${TomlWriter.string(this.rev)}");
+        StringBuilder deps = new StringBuilder();
+        for (&Dependency dep : this.dependencies) {
+            if (!deps.isEmpty()) {
+                deps.append(", ");
+            }
+            deps.append("${TomlWriter.key(dep.name())} = ${TomlWriter.string(dep.req().toString())}");
+        }
+        out.appendLine(deps.isEmpty() ? "dependencies = {}" : "dependencies = { $deps }");
+        out.appendLine("yanked = ${this.yanked}");
+        return out.toString();
+    }
+}

@@ -1,0 +1,263 @@
+package krelp.manifest;
+
+import krelp.semver.SemverException;
+import krelp.semver.Version;
+import krelp.semver.VersionReq;
+import krelp.toml.TomlException;
+import krelp.toml.TomlParser;
+import krelp.toml.TomlTable;
+import krelp.toml.TomlValue;
+import krelp.util.KrelpException;
+import krelp.util.Shell;
+import std.io.Files;
+import std.io.IOException;
+import std.io.Path;
+import std.util.ArrayList;
+import std.util.List;
+
+final class Manifest {
+    public static String FILE = "krelp.toml";
+
+    private String dir;
+    private String name;
+    private Version version;
+    private String? edition;
+    private String? description;
+    private String? license;
+    private String? repository;
+    private List<String> authors;
+    private List<Dependency> dependencies;
+
+    private Manifest(String dir, String name, Version version) {
+        this.dir = dir;
+        this.name = name;
+        this.version = version;
+        this.edition = null;
+        this.description = null;
+        this.license = null;
+        this.repository = null;
+        this.authors = new ArrayList<>();
+        this.dependencies = new ArrayList<>();
+    }
+
+    static Manifest read(String dir) throws KrelpException {
+        String file = Path.join(dir, Manifest.FILE);
+        if (!Files.isFile(file)) {
+            throw new KrelpException("`$dir` has no `${Manifest.FILE}`");
+        }
+        String text;
+        try {
+            text = Files.readString(file);
+        } catch (IOException e) {
+            throw new KrelpException(e.getMessage() ?: "couldn't read `$file`");
+        }
+        return Manifest.parse(text, dir, file);
+    }
+
+    static Manifest parse(String text, String dir, String file) throws KrelpException {
+        try {
+            TomlTable root = TomlParser.parse(text, file);
+            Manifest.warnUnknown(file, root.unknownKeys("package", "dependencies", "dev-dependencies"));
+            &TomlTable info = root.requireTable("package");
+            Manifest.warnUnknown(file, info.unknownKeys(
+                "name", "version", "edition", "description", "license", "repository", "authors"
+            ));
+            String name = info.requireString("name");
+            String? problem = Manifest.checkName(name);
+            if (problem != null) {
+                throw new KrelpException("$file: $problem");
+            }
+            Version version;
+            try {
+                version = Version.parse(info.requireString("version"));
+            } catch (SemverException e) {
+                throw new KrelpException("$file: `package.version`: ${e.getMessage() ?: ""}");
+            }
+            Manifest manifest = new Manifest(dir, name, version);
+            manifest.edition = info.string("edition");
+            manifest.description = info.string("description");
+            manifest.license = info.string("license");
+            manifest.repository = info.string("repository");
+            manifest.authors = info.strings("authors");
+            manifest.readDependencies(&root, "dependencies", false, file);
+            manifest.readDependencies(&root, "dev-dependencies", true, file);
+            return manifest;
+        } catch (TomlException e) {
+            throw new KrelpException(e.getMessage() ?: "`$file` is not valid TOML");
+        }
+    }
+
+    static String? checkName(String name) {
+        if (name.isEmpty()) {
+            return "the package name is empty";
+        }
+        char[] chars = name.chars();
+        if (chars[0] >= '0' && chars[0] <= '9') {
+            return "the package name `$name` starts with a digit";
+        }
+        for (char c : chars) {
+            boolean ok = (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_';
+            if (!ok) {
+                return "the package name `$name` may only use lowercase letters, digits and `_`, "
+                    + "because it is also the name of the package in Krelpin code";
+            }
+        }
+        if (name == "std" || name == "tests") {
+            return "the package name `$name` is reserved";
+        }
+        return null;
+    }
+
+    String dir() {
+        return this.dir;
+    }
+
+    String srcDir() {
+        return Path.join(this.dir, "src");
+    }
+
+    String testsDir() {
+        return Path.join(this.dir, "tests");
+    }
+
+    String file() {
+        return Path.join(this.dir, Manifest.FILE);
+    }
+
+    String name() {
+        return this.name;
+    }
+
+    &Version version() {
+        return &this.version;
+    }
+
+    String? edition() {
+        return this.edition;
+    }
+
+    String? description() {
+        return this.description;
+    }
+
+    String? license() {
+        return this.license;
+    }
+
+    String? repository() {
+        return this.repository;
+    }
+
+    &List<String> authors() {
+        return &this.authors;
+    }
+
+    &List<Dependency> dependencies() {
+        return &this.dependencies;
+    }
+
+    boolean isProgram() {
+        return Files.isFile(Path.join(this.srcDir(), "Main.kr"));
+    }
+
+    private mut void readDependencies(&TomlTable root, String key, boolean dev, String file)
+        throws TomlException, KrelpException {
+        (&TomlTable)? table = root.table(key);
+        if (table == null) {
+            return;
+        }
+        for (&String name : table.keys()) {
+            String? problem = Manifest.checkName(name);
+            if (problem != null) {
+                throw new KrelpException("$file: in `[$key]`: $problem");
+            }
+            for (&Dependency other : this.dependencies) {
+                if (other.name() == name) {
+                    throw new KrelpException(
+                        "$file: `$name` is in both `[dependencies]` and `[dev-dependencies]`"
+                    );
+                }
+            }
+            if (name == this.name) {
+                throw new KrelpException("$file: the package `$name` depends on itself");
+            }
+            (&TomlValue)? value = table.get(name);
+            if (value == null) {
+                continue;
+            }
+            Dependency dependency = switch (value) {
+                case Text(String req) -> new Dependency(
+                    name, DepKind.Registry, Manifest.req(req, file, table.qualify(name)), dev
+                );
+                case Table(TomlTable detail) -> Manifest.detailed(name, &detail, dev, file);
+                default -> throw new KrelpException(
+                    "$file: `${table.qualify(name)}` must be a version requirement like \"1.0\" "
+                    + "or a table like { path = \"../util\" }"
+                );
+            };
+            this.dependencies.add(dependency);
+        }
+    }
+
+    private static Dependency detailed(String name, &TomlTable detail, boolean dev, String file)
+        throws TomlException, KrelpException {
+        Manifest.warnUnknown(file, detail.unknownKeys("version", "path", "git", "branch", "tag", "rev"));
+        String? version = detail.string("version");
+        VersionReq req = version == null
+            ? VersionReq.any()
+            : Manifest.req(version, file, detail.qualify("version"));
+        String? path = detail.string("path");
+        String? git = detail.string("git");
+        String? branch = detail.string("branch");
+        String? tag = detail.string("tag");
+        String? rev = detail.string("rev");
+        int refs = (branch != null ? 1 : 0) + (tag != null ? 1 : 0) + (rev != null ? 1 : 0);
+        if (path != null && git != null) {
+            throw new KrelpException("$file: `${detail.path()}` has both `path` and `git`; choose one");
+        }
+        if (git == null && refs > 0) {
+            throw new KrelpException(
+                "$file: `${detail.path()}` has `branch`, `tag` or `rev` without `git`"
+            );
+        }
+        if (refs > 1) {
+            throw new KrelpException(
+                "$file: `${detail.path()}` may have only one of `branch`, `tag` and `rev`"
+            );
+        }
+        if (path != null) {
+            return new Dependency(name, DepKind.Path(path), req, dev);
+        }
+        if (git != null) {
+            GitRef ref = GitRef.DefaultBranch;
+            if (branch != null) {
+                ref = GitRef.Branch(branch);
+            } else if (tag != null) {
+                ref = GitRef.Tag(tag);
+            } else if (rev != null) {
+                ref = GitRef.Rev(rev);
+            }
+            return new Dependency(name, DepKind.Git(git, ref), req, dev);
+        }
+        if (version == null) {
+            throw new KrelpException(
+                "$file: `${detail.path()}` needs a `version`, a `path` or a `git` repository"
+            );
+        }
+        return new Dependency(name, DepKind.Registry, req, dev);
+    }
+
+    private static VersionReq req(String text, String file, String key) throws KrelpException {
+        try {
+            return VersionReq.parse(text);
+        } catch (SemverException e) {
+            throw new KrelpException("$file: `$key`: ${e.getMessage() ?: ""}");
+        }
+    }
+
+    private static void warnUnknown(String file, List<String> keys) {
+        for (&String key : keys) {
+            Shell.warn("$file: unknown setting `$key` is ignored");
+        }
+    }
+}

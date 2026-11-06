@@ -1,0 +1,116 @@
+package tests;
+
+import krelp.lock.LockedPackage;
+import krelp.lock.Lockfile;
+import krelp.manifest.Dependency;
+import krelp.manifest.Manifest;
+import krelp.manifest.ManifestEditor;
+import krelp.util.Fs;
+import krelp.util.KrelpException;
+import std.util.List;
+
+class ManifestTest {
+    static Manifest parse(String text) {
+        try {
+            return Manifest.parse(text, "/p", "krelp.toml");
+        } catch (KrelpException e) {
+            throw new IllegalStateException(e.getMessage() ?: "");
+        }
+    }
+
+    static String error(String text) {
+        try {
+            Manifest.parse(text, "/p", "krelp.toml");
+            return "no error";
+        } catch (KrelpException e) {
+            return e.getMessage() ?: "";
+        }
+    }
+
+    @Test
+    static void readsDependencies() {
+        Manifest manifest = ManifestTest.parse(
+            "[package]\nname = \"app\"\nversion = \"1.2.3\"\nedition = \"2026\"\n\n"
+            + "[dependencies]\n"
+            + "tide = \"0.1\"\n"
+            + "util = { path = \"../util\" }\n"
+            + "http = { git = \"https://example.com/http.git\", tag = \"v1\" }\n"
+            + "\n[dev-dependencies]\n"
+            + "check = { version = \"^2\" }\n"
+        );
+        Check.equal(manifest.name(), "app");
+        Check.equal(manifest.version().toString(), "1.2.3");
+        Check.equal(manifest.edition() ?: "", "2026");
+        &List<Dependency> deps = manifest.dependencies();
+        Check.that(deps.size() == 4, "four dependencies");
+        Check.equal(deps.get(0).toToml(), "\"0.1\"");
+        Check.equal(deps.get(1).toToml(), "{ path = \"../util\" }");
+        Check.equal(deps.get(2).toToml(), "{ git = \"https://example.com/http.git\", tag = \"v1\" }");
+        Check.that(deps.get(3).dev() && deps.get(3).isRegistry(), "check to be a registry dev-dependency");
+    }
+
+    @Test
+    static void rejectsInvalidManifests() {
+        String header = "[package]\nname = \"app\"\nversion = \"0.1.0\"\n";
+        Check.equal(ManifestTest.error("[package]\nname = \"App\"\nversion = \"0.1.0\"\n"),
+            "krelp.toml: the package name `App` may only use lowercase letters, digits and `_`, "
+            + "because it is also the name of the package in Krelpin code");
+        Check.equal(ManifestTest.error("[package]\nname = \"app\"\nversion = \"1\"\n"),
+            "krelp.toml: `package.version`: `1` is not a version; a version has three numbers, like `1.0.0`");
+        Check.equal(ManifestTest.error(header + "[dependencies]\nx = { path = \"a\", git = \"b\" }\n"),
+            "krelp.toml: `dependencies.x` has both `path` and `git`; choose one");
+        Check.equal(ManifestTest.error(header + "[dependencies]\nx = { tag = \"v1\" }\n"),
+            "krelp.toml: `dependencies.x` has `branch`, `tag` or `rev` without `git`");
+        Check.equal(ManifestTest.error(header + "[dependencies]\nx = \"1\"\n[dev-dependencies]\nx = \"1\"\n"),
+            "krelp.toml: `x` is in both `[dependencies]` and `[dev-dependencies]`");
+        Check.equal(ManifestTest.error(header + "[dependencies]\napp = \"1\"\n"),
+            "krelp.toml: the package `app` depends on itself");
+        Check.equal(ManifestTest.error("name = \"x\"\n"), "the table `[package]` is missing");
+    }
+
+    @Test
+    static void editsKeepCommentsAndLayout() {
+        ManifestEditor editor = new ManifestEditor(
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n"
+            + "[dependencies]\n# the runtime\ntide = \"0.1\"\nutil.path = \"../util\"\n\n"
+            + "# tests only\n[dev-dependencies.check]\nversion = \"2\"\n"
+        );
+        editor.set("dependencies", "json", "\"1.2\"");
+        editor.set("dependencies", "tide", "\"0.2\"");
+        Check.that(editor.remove("dependencies", "util"), "util to be removed");
+        Check.that(editor.remove("dev-dependencies", "check"), "check to be removed");
+        Check.that(!editor.remove("dependencies", "nothing"), "nothing to be removed");
+        editor.set("dev-dependencies", "check", "\"3\"");
+        Check.equal(editor.text(),
+            "[package]\nname = \"app\"\nversion = \"0.1.0\"\n\n"
+            + "[dependencies]\n# the runtime\njson = \"1.2\"\ntide = \"0.2\"\n\n"
+            + "# tests only\n\n[dev-dependencies]\ncheck = \"3\"\n");
+    }
+
+    @Test
+    static void lockfilesRoundTrip() {
+        String text = "# This file is written by krelp. Do not edit it by hand.\n"
+            + "version = 1\n\n"
+            + "[[package]]\nname = \"json\"\nversion = \"1.2.3\"\n"
+            + "source = \"registry+https://example.com/index.git\"\ncommit = \"abc\"\n\n"
+            + "[[package]]\nname = \"util\"\nversion = \"0.1.0\"\nsource = \"path+../util\"\n"
+            + "dependencies = [\"json\"]\n";
+        try {
+            Lockfile lock = Lockfile.parse(text, "krelp.lock");
+            Check.equal(lock.toToml(), text);
+            (&LockedPackage)? json = lock.find(&"json");
+            Check.that(json != null && json.source().isRegistry(), "json to come from the registry");
+            Check.that(lock.find(&"tide") == null, "tide not to be locked");
+        } catch (KrelpException e) {
+            throw new IllegalStateException(e.getMessage() ?: "");
+        }
+    }
+
+    @Test
+    static void relativePaths() {
+        Check.equal(Fs.relative("/a/b/app", "/a/b/util"), "../util");
+        Check.equal(Fs.relative("/a/b", "/a/b/c/d"), "c/d");
+        Check.equal(Fs.relative("/a/b", "/a/b"), ".");
+        Check.equal(Fs.relative("/x/y", "/z"), "../../z");
+    }
+}

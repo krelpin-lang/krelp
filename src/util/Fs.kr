@@ -36,6 +36,43 @@ final class Fs {
         }
     }
 
+    static String relative(String from, String to) {
+        String[] base = Fs.parts(from);
+        String[] target = Fs.parts(to);
+        int shared = 0;
+        while (shared < base.length && shared < target.length && base[shared] == target[shared]) {
+            shared++;
+        }
+        StringBuilder out = new StringBuilder();
+        for (int i = shared; i < base.length; i++) {
+            if (!out.isEmpty()) {
+                out.append("/");
+            }
+            out.append("..");
+        }
+        for (int i = shared; i < target.length; i++) {
+            if (!out.isEmpty()) {
+                out.append("/");
+            }
+            out.append(target[i]);
+        }
+        return out.isEmpty() ? "." : out.toString();
+    }
+
+    private static String[] parts(String path) {
+        String trimmed = path;
+        while (trimmed.startsWith("/")) {
+            trimmed = trimmed.substring(1);
+        }
+        while (trimmed.endsWith("/")) {
+            trimmed = trimmed.substring(0, trimmed.length() - 1);
+        }
+        if (trimmed.isEmpty()) {
+            return new String[0];
+        }
+        return trimmed.split("/");
+    }
+
     private static boolean isLink(String path) {
         try {
             String parent = Path.parent(path);
