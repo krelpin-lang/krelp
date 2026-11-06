@@ -8,7 +8,17 @@ import krelp.util.KrelpException;
 import std.util.ArrayList;
 import std.util.List;
 
-record Requirements(String name, SourceId source, List<Demand> demands) {
+final class Requirements {
+    private String name;
+    private SourceId source;
+    private List<Demand> demands;
+
+    private Requirements(String name, SourceId source, List<Demand> demands) {
+        this.name = name;
+        this.source = source;
+        this.demands = demands;
+    }
+
     static Requirements of(&String name, &List<Demand> demands, &List<Demand> hints) throws KrelpException {
         List<Demand> mine = new ArrayList<>();
         for (&Demand demand : demands) {
@@ -35,6 +45,14 @@ record Requirements(String name, SourceId source, List<Demand> demands) {
             }
         }
         return new Requirements(name, source, mine);
+    }
+
+    String name() {
+        return this.name;
+    }
+
+    SourceId source() {
+        return this.source;
     }
 
     String requester() {

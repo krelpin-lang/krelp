@@ -3,7 +3,15 @@ package krelp.semver;
 import std.util.ArrayList;
 import std.util.List;
 
-record VersionReq(String text, List<Bound> bounds) {
+final class VersionReq {
+    private String text;
+    private List<Bound> bounds;
+
+    private VersionReq(String text, List<Bound> bounds) {
+        this.text = text;
+        this.bounds = bounds;
+    }
+
     static VersionReq any() {
         return new VersionReq("*", new ArrayList<>());
     }
