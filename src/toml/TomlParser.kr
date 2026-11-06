@@ -221,6 +221,9 @@ final class TomlParser {
             throw this.errorAt(line, column, "expected a value");
         }
         TomlValue? parsed = TomlParser.parseNumber(literal);
+        if (parsed == null && TomlParser.isDate(literal)) {
+            throw this.errorAt(line, column, "dates and times are not supported");
+        }
         if (parsed == null) {
             throw this.errorAt(line, column, "`$literal` is not a valid value");
         }
@@ -540,8 +543,47 @@ final class TomlParser {
         if (target.isInline()) {
             return "an inline table cannot be extended";
         }
+        TomlParser.rebase(&mut value, target.qualify(last));
         target.put(last, value);
         return null;
+    }
+
+    private static void rebase(&mut TomlValue value, String path) {
+        switch (value) {
+            case Table(TomlTable table) -> {
+                table.setPath(path);
+                List<String> keys = new ArrayList<>();
+                for (&String key : table.keys()) {
+                    keys.add(key);
+                }
+                for (&String key : &keys) {
+                    String child = table.qualify(key);
+                    (&mut TomlValue)? inner = table.getMut(key);
+                    if (inner != null) {
+                        TomlParser.rebase(inner, child);
+                    }
+                }
+            }
+            case Array(List<TomlValue> items) -> {
+                for (int i = 0; i < items.size(); i++) {
+                    TomlParser.rebase(items.getMut(i), path);
+                }
+            }
+            default -> {}
+        }
+    }
+
+    private static boolean isDate(String literal) {
+        char[] chars = literal.chars();
+        if (chars.length < 10 || chars[4] != '-' || chars[7] != '-') {
+            return false;
+        }
+        for (int i = 0; i < 10; i++) {
+            if (i != 4 && i != 7 && (chars[i] < '0' || chars[i] > '9')) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static (&mut TomlTable)? walk(
