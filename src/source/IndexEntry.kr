@@ -1,49 +1,49 @@
 package krelp.source;
 
+import krelp.manifest.DepKind;
 import krelp.manifest.Dependency;
+import krelp.semver.SemverException;
 import krelp.semver.Version;
+import krelp.semver.VersionReq;
+import krelp.toml.TomlException;
+import krelp.toml.TomlTable;
 import krelp.toml.TomlWriter;
+import krelp.util.KrelpException;
+import std.util.ArrayList;
 import std.util.List;
 
-final class IndexEntry {
-    private String name;
-    private Version version;
-    private String git;
-    private String rev;
-    private List<Dependency> dependencies;
-    private boolean yanked;
-
-    IndexEntry(String name, Version version, String git, String rev, List<Dependency> dependencies, boolean yanked) {
-        this.name = name;
-        this.version = version;
-        this.git = git;
-        this.rev = rev;
-        this.dependencies = dependencies;
-        this.yanked = yanked;
+record IndexEntry(String name, Version version, String git, String rev, List<Dependency> dependencies, boolean yanked) {
+    static IndexEntry fromToml(String name, &TomlTable table, String file) throws TomlException, KrelpException {
+        Version version;
+        try {
+            version = Version.parse(table.requireString("version"));
+        } catch (SemverException e) {
+            throw new KrelpException("$file: ${e.getMessage() ?: ""}");
+        }
+        List<Dependency> dependencies = new ArrayList<>();
+        (&TomlTable)? deps = table.table("dependencies");
+        if (deps != null) {
+            for (&String dep : deps.keys()) {
+                String req = deps.requireString(dep);
+                try {
+                    dependencies.add(new Dependency(dep, DepKind.Registry, VersionReq.parse(req), false));
+                } catch (SemverException e) {
+                    throw new KrelpException("$file: `${deps.qualify(dep)}`: ${e.getMessage() ?: ""}");
+                }
+            }
+        }
+        return new IndexEntry(
+            name,
+            version,
+            table.requireString("git"),
+            table.requireString("rev"),
+            dependencies,
+            table.bool("yanked", false)
+        );
     }
 
-    String name() {
-        return this.name;
-    }
-
-    &Version version() {
-        return &this.version;
-    }
-
-    String git() {
-        return this.git;
-    }
-
-    String rev() {
-        return this.rev;
-    }
-
-    &List<Dependency> dependencies() {
-        return &this.dependencies;
-    }
-
-    boolean yanked() {
-        return this.yanked;
+    boolean isStable() {
+        return !this.yanked && !this.version.isPrerelease();
     }
 
     String toToml() {

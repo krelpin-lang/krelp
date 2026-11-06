@@ -1,45 +1,41 @@
 package krelp.manifest;
 
 import krelp.semver.VersionReq;
+import krelp.source.SourceId;
 import krelp.toml.TomlWriter;
+import krelp.util.Fs;
+import krelp.util.KrelpException;
+import std.io.Files;
 
-final class Dependency {
-    private String name;
-    private DepKind kind;
-    private VersionReq req;
-    private boolean dev;
-
-    Dependency(String name, DepKind kind, VersionReq req, boolean dev) {
-        this.name = name;
-        this.kind = kind;
-        this.req = req;
-        this.dev = dev;
-    }
-
+record Dependency(String name, DepKind kind, VersionReq req, boolean dev) {
     Dependency copy() {
         return new Dependency(this.name, this.kind, this.req.copy(), this.dev);
-    }
-
-    String name() {
-        return this.name;
-    }
-
-    &DepKind kind() {
-        return &this.kind;
-    }
-
-    &VersionReq req() {
-        return &this.req;
-    }
-
-    boolean dev() {
-        return this.dev;
     }
 
     boolean isRegistry() {
         return switch (this.kind) {
             case Registry -> true;
             default -> false;
+        };
+    }
+
+    SourceId sourceFrom(String from, String dir, String registry) throws KrelpException {
+        return switch (this.kind) {
+            case Path(String path) -> {
+                String resolved = Fs.resolve(dir, path);
+                if (!Files.isDirectory(resolved)) {
+                    throw new KrelpException(
+                        "`$from` depends on `${this.name}` at `$path`, but `$resolved` is not a directory"
+                    );
+                }
+                yield SourceId.Path(resolved);
+            }
+            case Git(String url, GitRef ref) -> {
+                boolean remote = url.contains("://") || url.contains("@") || url.startsWith("/");
+                String resolved = Fs.resolve(dir, url);
+                yield SourceId.Git(!remote && Files.isDirectory(resolved) ? resolved : url, ref);
+            }
+            case Registry -> SourceId.Registry(registry);
         };
     }
 
@@ -51,16 +47,7 @@ final class Dependency {
             case Path(String dir) -> version == "*"
                 ? "{ path = ${TomlWriter.string(dir)} }"
                 : "{ path = ${TomlWriter.string(dir)}, version = $quoted }";
-            case Git(String url, GitRef ref) -> "{ git = ${TomlWriter.string(url)}${Dependency.refEntry(&ref)} }";
-        };
-    }
-
-    private static String refEntry(&GitRef ref) {
-        return switch (ref) {
-            case DefaultBranch -> "";
-            case Branch(String name) -> ", branch = ${TomlWriter.string(name)}";
-            case Tag(String name) -> ", tag = ${TomlWriter.string(name)}";
-            case Rev(String rev) -> ", rev = ${TomlWriter.string(rev)}";
+            case Git(String url, GitRef ref) -> "{ git = ${TomlWriter.string(url)}${ref.tomlEntry()} }";
         };
     }
 }

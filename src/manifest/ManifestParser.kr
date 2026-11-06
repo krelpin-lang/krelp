@@ -1,0 +1,156 @@
+package krelp.manifest;
+
+import krelp.semver.SemverException;
+import krelp.semver.Version;
+import krelp.semver.VersionReq;
+import krelp.toml.TomlException;
+import krelp.toml.TomlParser;
+import krelp.toml.TomlTable;
+import krelp.toml.TomlValue;
+import krelp.util.KrelpException;
+import krelp.util.Shell;
+import std.util.ArrayList;
+import std.util.List;
+
+final class ManifestParser {
+    private String file;
+    private Shell shell;
+
+    ManifestParser(String file, Shell shell) {
+        this.file = file;
+        this.shell = shell;
+    }
+
+    Manifest parse(String text, String dir) throws KrelpException {
+        try {
+            TomlTable root = TomlParser.parse(text, this.file);
+            this.warnUnknown(root.unknownKeys("package", "dependencies", "dev-dependencies"));
+            &TomlTable info = root.requireTable("package");
+            this.warnUnknown(info.unknownKeys(
+                "name", "version", "edition", "description", "license", "repository", "authors"
+            ));
+            String name = info.requireString("name");
+            String? problem = Manifest.checkName(name);
+            if (problem != null) {
+                throw new KrelpException("${this.file}: $problem");
+            }
+            Version version;
+            try {
+                version = Version.parse(info.requireString("version"));
+            } catch (SemverException e) {
+                throw new KrelpException("${this.file}: `package.version`: ${e.getMessage() ?: ""}");
+            }
+            List<Dependency> dependencies = new ArrayList<>();
+            this.dependencies(&root, "dependencies", false, &name, &mut dependencies);
+            this.dependencies(&root, "dev-dependencies", true, &name, &mut dependencies);
+            return new Manifest(
+                dir,
+                name,
+                version,
+                info.string("edition"),
+                info.string("description"),
+                info.string("license"),
+                info.string("repository"),
+                info.strings("authors"),
+                dependencies
+            );
+        } catch (TomlException e) {
+            throw new KrelpException(e.getMessage() ?: "`${this.file}` is not valid TOML");
+        }
+    }
+
+    private void dependencies(
+        &TomlTable root,
+        String key,
+        boolean dev,
+        &String owner,
+        &mut List<Dependency> found
+    ) throws TomlException, KrelpException {
+        (&TomlTable)? table = root.table(key);
+        if (table == null) {
+            return;
+        }
+        for (&String name : table.keys()) {
+            String? problem = Manifest.checkName(name);
+            if (problem != null) {
+                throw new KrelpException("${this.file}: in `[$key]`: $problem");
+            }
+            for (&Dependency other : found) {
+                if (other.name() == name) {
+                    throw new KrelpException(
+                        "${this.file}: `$name` is in both `[dependencies]` and `[dev-dependencies]`"
+                    );
+                }
+            }
+            if (name == owner) {
+                throw new KrelpException("${this.file}: the package `$name` depends on itself");
+            }
+            (&TomlValue)? value = table.get(name);
+            if (value == null) {
+                continue;
+            }
+            Dependency dependency = switch (value) {
+                case Text(String req) -> new Dependency(
+                    name, DepKind.Registry, this.req(req, table.qualify(name)), dev
+                );
+                case Table(TomlTable detail) -> this.detailed(name, &detail, dev);
+                default -> throw new KrelpException(
+                    "${this.file}: `${table.qualify(name)}` must be a version requirement like \"1.0\" "
+                    + "or a table like { path = \"../util\" }"
+                );
+            };
+            found.add(dependency);
+        }
+    }
+
+    private Dependency detailed(String name, &TomlTable detail, boolean dev) throws TomlException, KrelpException {
+        this.warnUnknown(detail.unknownKeys("version", "path", "git", "branch", "tag", "rev"));
+        String? version = detail.string("version");
+        VersionReq req = version == null ? VersionReq.any() : this.req(version, detail.qualify("version"));
+        String? path = detail.string("path");
+        String? git = detail.string("git");
+        String? branch = detail.string("branch");
+        String? tag = detail.string("tag");
+        String? rev = detail.string("rev");
+        int refs = (branch != null ? 1 : 0) + (tag != null ? 1 : 0) + (rev != null ? 1 : 0);
+        if (path != null && git != null) {
+            throw new KrelpException("${this.file}: `${detail.path()}` has both `path` and `git`; choose one");
+        }
+        if (git == null && refs > 0) {
+            throw new KrelpException(
+                "${this.file}: `${detail.path()}` has `branch`, `tag` or `rev` without `git`"
+            );
+        }
+        if (refs > 1) {
+            throw new KrelpException(
+                "${this.file}: `${detail.path()}` may have only one of `branch`, `tag` and `rev`"
+            );
+        }
+        if (path != null) {
+            return new Dependency(name, DepKind.Path(path), req, dev);
+        }
+        if (git != null) {
+            return new Dependency(name, DepKind.Git(git, GitRef.of(branch, tag, rev)), req, dev);
+        }
+        if (version == null) {
+            throw new KrelpException(
+                "${this.file}: `${detail.path()}` needs a `version`, a `path` or a `git` repository"
+            );
+        }
+        return new Dependency(name, DepKind.Registry, req, dev);
+    }
+
+    private VersionReq req(String text, String key) throws KrelpException {
+        try {
+            return VersionReq.parse(text);
+        } catch (SemverException e) {
+            throw new KrelpException("${this.file}: `$key`: ${e.getMessage() ?: ""}");
+        }
+    }
+
+    private void warnUnknown(List<String> keys) {
+        for (&String key : keys) {
+            this.shell.warn("${this.file}: unknown setting `$key` is ignored");
+        }
+    }
+}

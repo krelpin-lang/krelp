@@ -7,6 +7,7 @@ import krelp.manifest.GitRef;
 import krelp.manifest.Manifest;
 import krelp.ops.Builder;
 import krelp.ops.Edit;
+import krelp.ops.Krelp;
 import krelp.ops.LockOptions;
 import krelp.ops.Project;
 import krelp.ops.Publish;
@@ -18,172 +19,168 @@ import krelp.util.KrelpException;
 import krelp.util.Shell;
 import std.io.Files;
 import std.io.IOException;
-import std.io.Path;
-import std.util.ArrayList;
 import std.util.List;
 
 final class Cli {
     public static String VERSION = "0.1.0";
 
-    private Cli() {}
+    private Shell shell;
 
-    static int main(&String[] argv) {
+    Cli() {
+        this.shell = new Shell(false);
+    }
+
+    mut int run(&String[] argv) {
         int first = 0;
         while (first < argv.length && argv[first].startsWith("-")) {
             String option = argv[first];
             if (option == "-q" || option == "--quiet") {
-                Shell.setQuiet(true);
+                this.shell = new Shell(true);
             } else if (option == "-V" || option == "--version") {
                 Console.println("krelp ${Cli.VERSION}");
                 return 0;
             } else if (option == "-h" || option == "--help") {
-                Console.print(Help.overview());
+                Console.print(Command.overview());
                 return 0;
             } else {
-                Shell.error("krelp has no option `$option`", "run `krelp help` to see the options");
+                this.shell.error("krelp has no option `$option`", "run `krelp help` to see the options");
                 return 2;
             }
             first++;
         }
         if (first >= argv.length) {
-            Console.print(Help.overview());
+            Console.print(Command.overview());
             return 2;
         }
-        String command = argv[first];
+        Command? command = Command.parse(argv[first]);
+        if (command == null) {
+            this.shell.error("krelp has no command `${argv[first]}`", "run `krelp help` to see the commands");
+            return 1;
+        }
         Args args = new Args(argv, first + 1);
+        if (args.flag("-h", "--help")) {
+            Console.print(command.help());
+            return 0;
+        }
+        Krelp krelp = Krelp.fromEnv(this.shell);
         try {
-            if (args.flag("-h", "--help")) {
-                return Cli.help(command);
-            }
-            return Cli.dispatch(command, args);
+            return this.dispatch(command, &mut args, &mut krelp);
         } catch (KrelpException e) {
-            Shell.error(e.getMessage() ?: "krelp failed", e.help());
+            this.shell.error(e.getMessage() ?: "krelp failed", e.help());
             return 1;
         }
     }
 
-    private static int dispatch(String command, Args args) throws KrelpException {
-        if (command == "help") {
-            List<String> topics = args.positionals();
-            args.finish(command);
-            return topics.isEmpty() ? Cli.help("") : Cli.help(topics.get(0));
-        }
-        if (command == "new" || command == "init") {
-            boolean library = args.flag("--lib");
-            String? name = args.option("--name");
-            List<String> dirs = args.positionals();
-            args.finish(command);
-            String dir;
-            if (command == "new") {
-                if (dirs.size() != 1) {
-                    throw new KrelpException("`krelp new` needs the directory to create", "run `krelp new my_app`");
-                }
-                dir = Fs.resolve(System.workingDirectory(), dirs.get(0));
-                if (Files.exists(dir)) {
-                    throw new KrelpException("`${dirs.get(0)}` already exists", "use `krelp init` inside it instead");
-                }
-            } else {
-                if (!dirs.isEmpty()) {
-                    throw new KrelpException("`krelp init` creates the package in the current directory");
-                }
-                dir = System.workingDirectory();
-            }
-            Scaffold.create(dir, name ?: Scaffold.nameOf(dir), library);
-            return 0;
-        }
-        if (command == "build" || command == "check" || command == "run" || command == "test") {
+    private int dispatch(Command command, &mut Args args, &mut Krelp krelp) throws KrelpException {
+        String word = command.word();
+        if (command.builds()) {
             Profile profile = args.flag("--release", "-r") ? Profile.RELEASE : Profile.DEBUG;
-            LockOptions options = new LockOptions(args.flag("--locked"), false, new ArrayList<>());
-            args.finish(command);
-            Project project = Project.load(&options);
-            if (command == "build") {
-                Builder.build(&project, profile);
-            } else if (command == "check") {
-                Builder.check(&project, profile);
-            } else if (command == "run") {
-                return Builder.run(&project, profile, args.passthrough());
-            } else {
-                Builder.test(&project, profile);
-            }
-            return 0;
-        }
-        if (command == "add") {
-            Dependency dependency = Cli.dependency(&mut args);
-            args.finish(command);
-            Edit.add(Project.find(), dependency);
-            return 0;
-        }
-        if (command == "remove") {
-            boolean dev = args.flag("--dev");
-            List<String> names = args.positionals();
-            args.finish(command);
-            if (names.isEmpty()) {
-                throw new KrelpException("`krelp remove` needs the names of the dependencies to remove");
-            }
-            Edit.remove(Project.find(), &names, dev);
-            return 0;
-        }
-        if (command == "update") {
-            List<String> names = args.positionals();
-            args.finish(command);
-            Manifest manifest = Project.find();
-            for (&String name : &names) {
-                boolean known = false;
-                for (&Dependency dep : manifest.dependencies()) {
-                    known = known || dep.name() == name;
+            LockOptions options = LockOptions.keep(args.flag("--locked"));
+            args.finish(word);
+            Builder builder = new Builder(krelp.load(&options), profile, krelp);
+            switch (command) {
+                case BUILD -> builder.build();
+                case CHECK -> builder.check();
+                case RUN -> {
+                    return builder.run(args.passthrough());
                 }
-                if (!known) {
-                    Shell.warn("`${manifest.name()}` does not depend on `$name` directly");
+                default -> builder.test();
+            }
+            return 0;
+        }
+        switch (command) {
+            case HELP -> {
+                List<String> topics = args.positionals();
+                args.finish(word);
+                if (topics.isEmpty()) {
+                    Console.print(Command.overview());
+                    return 0;
                 }
+                Command? topic = Command.parse(topics.get(0));
+                if (topic == null) {
+                    this.shell.error("krelp has no command `${topics.get(0)}`", "run `krelp help` to see the commands");
+                    return 1;
+                }
+                Console.print(topic.help());
             }
-            Project.resolve(manifest, &new LockOptions(false, names.isEmpty(), names));
-            Shell.status("Updated", "krelp.lock");
-            return 0;
-        }
-        if (command == "tree") {
-            LockOptions options = new LockOptions(args.flag("--locked"), false, new ArrayList<>());
-            args.finish(command);
-            Project project = Project.load(&options);
-            Console.print(project.resolution().tree());
-            return 0;
-        }
-        if (command == "publish") {
-            boolean dryRun = args.flag("--dry-run");
-            boolean allowDirty = args.flag("--allow-dirty");
-            args.finish(command);
-            Publish.run(dryRun, allowDirty);
-            return 0;
-        }
-        if (command == "clean") {
-            args.finish(command);
-            Manifest manifest = Project.find();
-            String target = Path.join(manifest.dir(), "target");
-            try {
-                Fs.removeAll(target);
-            } catch (IOException e) {
-                throw new KrelpException(e.getMessage() ?: "couldn't remove `$target`");
+            case NEW, INIT -> this.scaffold(command, args, krelp);
+            case ADD -> {
+                Dependency dependency = this.dependency(args, krelp);
+                args.finish(word);
+                Edit edit = new Edit(krelp);
+                edit.add(dependency);
+                edit.save();
             }
-            Shell.status("Removed", target);
-            return 0;
+            case REMOVE -> {
+                boolean dev = args.flag("--dev");
+                List<String> names = args.positionals();
+                args.finish(word);
+                if (names.isEmpty()) {
+                    throw new KrelpException("`krelp remove` needs the names of the dependencies to remove");
+                }
+                Edit edit = new Edit(krelp);
+                edit.remove(&names, dev);
+                edit.save();
+            }
+            case UPDATE -> {
+                List<String> names = args.positionals();
+                args.finish(word);
+                Manifest manifest = krelp.manifest();
+                for (&String name : &names) {
+                    if (!manifest.dependsOn(name)) {
+                        this.shell.warn("`${manifest.name()}` does not depend on `$name` directly");
+                    }
+                }
+                krelp.resolve(manifest, &LockOptions.updating(names));
+                this.shell.status("Updated", "krelp.lock");
+            }
+            case TREE -> {
+                LockOptions options = LockOptions.keep(args.flag("--locked"));
+                args.finish(word);
+                Console.print(krelp.load(&options).resolution().tree());
+            }
+            case PUBLISH -> {
+                boolean dryRun = args.flag("--dry-run");
+                boolean allowDirty = args.flag("--allow-dirty");
+                args.finish(word);
+                new Publish(krelp, dryRun, allowDirty).run();
+            }
+            case CLEAN -> {
+                args.finish(word);
+                String target = krelp.manifest().targetDir();
+                try {
+                    Fs.removeAll(target);
+                } catch (IOException e) {
+                    throw new KrelpException(e.getMessage() ?: "couldn't remove `$target`");
+                }
+                this.shell.status("Removed", target);
+            }
+            default -> {}
         }
-        throw new KrelpException("krelp has no command `$command`", "run `krelp help` to see the commands");
-    }
-
-    private static int help(String command) {
-        if (command.isEmpty()) {
-            Console.print(Help.overview());
-            return 0;
-        }
-        String? text = Help.of(command);
-        if (text == null) {
-            Shell.error("krelp has no command `$command`", "run `krelp help` to see the commands");
-            return 1;
-        }
-        Console.print(text);
         return 0;
     }
 
-    private static Dependency dependency(&mut Args args) throws KrelpException {
+    private void scaffold(Command command, &mut Args args, &Krelp krelp) throws KrelpException {
+        boolean library = args.flag("--lib");
+        String? name = args.option("--name");
+        List<String> dirs = args.positionals();
+        args.finish(command.word());
+        String dir = krelp.workingDirectory();
+        if (command == Command.NEW) {
+            if (dirs.size() != 1) {
+                throw new KrelpException("`krelp new` needs the directory to create", "run `krelp new my_app`");
+            }
+            dir = Fs.resolve(dir, dirs.get(0));
+            if (Files.exists(dir)) {
+                throw new KrelpException("`${dirs.get(0)}` already exists", "use `krelp init` inside it instead");
+            }
+        } else if (!dirs.isEmpty()) {
+            throw new KrelpException("`krelp init` creates the package in the current directory");
+        }
+        Scaffold.at(dir, name, library).create(this.shell);
+    }
+
+    private Dependency dependency(&mut Args args, &Krelp krelp) throws KrelpException {
         boolean dev = args.flag("--dev");
         String? path = args.option("--path");
         String? git = args.option("--git");
@@ -224,23 +221,14 @@ final class Cli {
             throw new KrelpException("a dependency comes from `--path` or from `--git`, not both");
         }
         if (path != null) {
-            Manifest manifest = Project.find();
-            String absolute = Fs.resolve(System.workingDirectory(), path);
+            String absolute = Fs.resolve(krelp.workingDirectory(), path);
             if (!Files.isDirectory(absolute)) {
                 throw new KrelpException("`$path` is not a directory");
             }
-            return new Dependency(name, DepKind.Path(Fs.relative(manifest.dir(), absolute)), req, dev);
+            return new Dependency(name, DepKind.Path(Fs.relative(krelp.manifest().dir(), absolute)), req, dev);
         }
         if (git != null) {
-            GitRef ref = GitRef.DefaultBranch;
-            if (branch != null) {
-                ref = GitRef.Branch(branch);
-            } else if (tag != null) {
-                ref = GitRef.Tag(tag);
-            } else if (rev != null) {
-                ref = GitRef.Rev(rev);
-            }
-            return new Dependency(name, DepKind.Git(git, ref), req, dev);
+            return new Dependency(name, DepKind.Git(git, GitRef.of(branch, tag, rev)), req, dev);
         }
         return new Dependency(name, DepKind.Registry, req, dev);
     }

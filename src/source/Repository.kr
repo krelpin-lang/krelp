@@ -1,0 +1,72 @@
+package krelp.source;
+
+import krelp.util.KrelpException;
+import std.io.IOException;
+import std.process.Command;
+import std.process.Output;
+
+record Repository(String dir) {
+    static Repository clone(String url, String into, String... flags) throws KrelpException {
+        Command command = Repository.git();
+        command.arg("clone");
+        for (int i = 0; i < flags.length; i++) {
+            command.arg(flags[i]);
+        }
+        command.args(url, into);
+        Repository.output(command);
+        return new Repository(into);
+    }
+
+    String run(String... args) throws KrelpException {
+        return Repository.output(this.command(&args));
+    }
+
+    String? tryRun(String... args) {
+        try {
+            Output output = this.command(&args).output();
+            return output.success() ? output.stdout() : null;
+        } catch (IOException e) {
+            return null;
+        }
+    }
+
+    boolean isWorkTree() {
+        return this.tryRun("rev-parse", "--is-inside-work-tree") != null;
+    }
+
+    boolean hasCommit(String commit) {
+        return this.tryRun("cat-file", "-e", "$commit^{commit}") != null;
+    }
+
+    private Command command(&String[] args) {
+        Command command = Repository.git();
+        command.args("-C", this.dir);
+        for (int i = 0; i < args.length; i++) {
+            command.arg(args[i]);
+        }
+        return command;
+    }
+
+    private static Command git() {
+        Command command = new Command("git");
+        command.env("GIT_TERMINAL_PROMPT", "0");
+        return command;
+    }
+
+    private static String output(Command command) throws KrelpException {
+        Output output;
+        try {
+            output = command.output();
+        } catch (IOException e) {
+            throw new KrelpException(
+                "couldn't run git: ${e.getMessage() ?: ""}",
+                "krelp needs git to fetch dependencies; install it and make sure it is on the PATH"
+            );
+        }
+        if (!output.success()) {
+            String message = output.stderr().trim();
+            throw new KrelpException("`$command` failed${message.isEmpty() ? "" : ":\n$message"}");
+        }
+        return output.stdout();
+    }
+}

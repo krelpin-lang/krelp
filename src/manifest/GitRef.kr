@@ -1,5 +1,7 @@
 package krelp.manifest;
 
+import krelp.toml.TomlWriter;
+
 enum GitRef {
     DefaultBranch,
     Branch(String name),
@@ -31,5 +33,27 @@ enum GitRef {
             case Tag(String name) -> "tag `$name`";
             case Rev(String rev) -> "commit `$rev`";
         };
+    }
+
+    String tomlEntry() {
+        return switch (this) {
+            case DefaultBranch -> "";
+            case Branch(String name) -> ", branch = ${TomlWriter.string(name)}";
+            case Tag(String name) -> ", tag = ${TomlWriter.string(name)}";
+            case Rev(String rev) -> ", rev = ${TomlWriter.string(rev)}";
+        };
+    }
+
+    static GitRef of(String? branch, String? tag, String? rev) {
+        if (branch != null) {
+            return GitRef.Branch(branch);
+        }
+        if (tag != null) {
+            return GitRef.Tag(tag);
+        }
+        if (rev != null) {
+            return GitRef.Rev(rev);
+        }
+        return GitRef.DefaultBranch;
     }
 }

@@ -1,5 +1,14 @@
 package krelp.ops;
 
+import std.util.ArrayList;
 import std.util.List;
 
-record LockOptions(boolean locked, boolean updateAll, List<String> update) {}
+record LockOptions(boolean locked, boolean updateAll, List<String> update) {
+    static LockOptions keep(boolean locked) {
+        return new LockOptions(locked, false, new ArrayList<>());
+    }
+
+    static LockOptions updating(List<String> names) {
+        return new LockOptions(false, names.isEmpty(), names);
+    }
+}

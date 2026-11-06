@@ -1,0 +1,46 @@
+package krelp.manifest;
+
+record ManifestLine(String text) {
+    boolean isBlank() {
+        return this.text.isBlank();
+    }
+
+    boolean isFiller() {
+        String trimmed = this.text.trim();
+        return trimmed.isEmpty() || trimmed.startsWith("#");
+    }
+
+    boolean startsSection() {
+        return this.text.trim().startsWith("[");
+    }
+
+    String header() {
+        String trimmed = this.text.trim();
+        int hash = trimmed.indexOf("#");
+        if (hash >= 0) {
+            trimmed = trimmed.substring(0, hash).trim();
+        }
+        if (!trimmed.startsWith("[") || trimmed.startsWith("[[")) {
+            return "";
+        }
+        return trimmed.replace(" ", "").replace("\t", "");
+    }
+
+    String key() {
+        String trimmed = this.text.trim();
+        StringBuilder key = new StringBuilder();
+        for (char c : trimmed.chars()) {
+            boolean bare = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                || (c >= '0' && c <= '9') || c == '_' || c == '-';
+            if (!bare) {
+                break;
+            }
+            key.append(c);
+        }
+        String rest = trimmed.substring(key.length()).trim();
+        if (rest.startsWith("=") || rest.startsWith(".")) {
+            return key.toString();
+        }
+        return "";
+    }
+}

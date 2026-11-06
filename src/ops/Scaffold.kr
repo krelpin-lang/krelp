@@ -1,7 +1,7 @@
 package krelp.ops;
 
 import krelp.manifest.Manifest;
-import krelp.source.Git;
+import krelp.source.Repository;
 import krelp.util.Fs;
 import krelp.util.KrelpException;
 import krelp.util.Shell;
@@ -9,54 +9,55 @@ import std.io.Files;
 import std.io.IOException;
 import std.io.Path;
 
-final class Scaffold {
-    private Scaffold() {}
-
-    static void create(String dir, String name, boolean library) throws KrelpException {
-        String? problem = Manifest.checkName(name);
-        if (problem != null) {
-            throw new KrelpException(problem, "choose a name like `my_app`, or pass `--name`");
+record Scaffold(String dir, String name, boolean library) {
+    static Scaffold at(String dir, String? name, boolean library) {
+        if (name != null) {
+            return new Scaffold(dir, name, library);
         }
-        if (Files.exists(Path.join(dir, Manifest.FILE))) {
-            throw new KrelpException("`$dir` already holds a package");
-        }
-        String src = Path.join(dir, "src");
-        try {
-            Fs.write(
-                Path.join(dir, Manifest.FILE),
-                "[package]\nname = \"$name\"\nversion = \"0.1.0\"\n\n[dependencies]\n"
-            );
-            if (library) {
-                String type = Scaffold.typeName(name);
-                Fs.write(Path.join(src, "$type.kr"), Scaffold.librarySource(name, type));
-            } else {
-                Fs.write(Path.join(src, "Main.kr"), Scaffold.programSource(name));
-            }
-            String ignore = Path.join(dir, ".gitignore");
-            if (!Files.exists(ignore)) {
-                Fs.write(ignore, "/target\n");
-            }
-        } catch (IOException e) {
-            throw new KrelpException(e.getMessage() ?: "couldn't write the files of `$name`");
-        }
-        if (Git.tryRun(dir, "rev-parse", "--is-inside-work-tree") == null) {
-            Git.tryRun(dir, "init", "--quiet");
-        }
-        Shell.status("Created", "${library ? "library" : "program"} `$name`");
-    }
-
-    static String nameOf(String dir) {
         String base = Path.fileName(dir);
         try {
             base = Path.fileName(Files.canonicalPath(dir));
         } catch (IOException e) {}
-        return base.replace("-", "_").toLowerCase();
+        return new Scaffold(dir, base.replace("-", "_").toLowerCase(), library);
     }
 
-    private static String typeName(String name) {
+    void create(Shell shell) throws KrelpException {
+        String? problem = Manifest.checkName(this.name);
+        if (problem != null) {
+            throw new KrelpException(problem, "choose a name like `my_app`, or pass `--name`");
+        }
+        if (Files.exists(Path.join(this.dir, Manifest.FILE))) {
+            throw new KrelpException("`${this.dir}` already holds a package");
+        }
+        String src = Path.join(this.dir, "src");
+        try {
+            Fs.write(
+                Path.join(this.dir, Manifest.FILE),
+                "[package]\nname = \"${this.name}\"\nversion = \"0.1.0\"\n\n[dependencies]\n"
+            );
+            if (this.library) {
+                Fs.write(Path.join(src, "${this.typeName()}.kr"), this.librarySource());
+            } else {
+                Fs.write(Path.join(src, "Main.kr"), this.programSource());
+            }
+            String ignore = Path.join(this.dir, ".gitignore");
+            if (!Files.exists(ignore)) {
+                Fs.write(ignore, "/target\n");
+            }
+        } catch (IOException e) {
+            throw new KrelpException(e.getMessage() ?: "couldn't write the files of `${this.name}`");
+        }
+        Repository repo = new Repository(this.dir);
+        if (!repo.isWorkTree()) {
+            repo.tryRun("init", "--quiet");
+        }
+        shell.status("Created", "${this.library ? "library" : "program"} `${this.name}`");
+    }
+
+    private String typeName() {
         StringBuilder out = new StringBuilder();
         boolean upper = true;
-        for (char c : name.chars()) {
+        for (char c : this.name.chars()) {
             if (c == '_') {
                 upper = true;
             } else if (upper) {
@@ -70,8 +71,8 @@ final class Scaffold {
         return type.isEmpty() || type == "Main" ? "Library" : type;
     }
 
-    private static String programSource(String name) {
-        return "package $name;\n"
+    private String programSource() {
+        return "package ${this.name};\n"
             + "\n"
             + "class Main {\n"
             + "    static void main(String[] args) {\n"
@@ -80,10 +81,11 @@ final class Scaffold {
             + "}\n";
     }
 
-    private static String librarySource(String name, String type) {
-        return "package $name;\n"
+    private String librarySource() {
+        String type = this.typeName();
+        return "package ${this.name};\n"
             + "\n"
-            + "/** The entry point of the `$name` library. */\n"
+            + "/** The entry point of the `${this.name}` library. */\n"
             + "final class $type {\n"
             + "    private $type() {}\n"
             + "\n"

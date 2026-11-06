@@ -4,5 +4,13 @@ enum Goal {
     CHECK,
     BUILD,
     UNIT_TESTS,
-    INTEGRATION_TESTS
+    INTEGRATION_TESTS;
+
+    boolean isTest() {
+        return this == Goal.UNIT_TESTS || this == Goal.INTEGRATION_TESTS;
+    }
+
+    String verb() {
+        return this == Goal.CHECK ? "Checking" : "Compiling";
+    }
 }

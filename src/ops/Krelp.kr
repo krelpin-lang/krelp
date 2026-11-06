@@ -1,0 +1,84 @@
+package krelp.ops;
+
+import krelp.lock.Lockfile;
+import krelp.manifest.Manifest;
+import krelp.resolve.Resolution;
+import krelp.resolve.Resolver;
+import krelp.source.Home;
+import krelp.source.Index;
+import krelp.source.Sources;
+import krelp.util.KrelpException;
+import krelp.util.Shell;
+
+final class Krelp {
+    private Shell shell;
+    private String compiler;
+    private String workingDirectory;
+    private Sources sources;
+
+    Krelp(Shell shell, String compiler, String registry, Home home, String workingDirectory) {
+        this.shell = shell;
+        this.compiler = compiler;
+        this.workingDirectory = workingDirectory;
+        this.sources = new Sources(registry, home, shell);
+    }
+
+    static Krelp fromEnv(Shell shell) {
+        return new Krelp(
+            shell,
+            Krelp.env("KRELPINC") ?: "krelpinc",
+            Krelp.env("KRELP_REGISTRY") ?: Index.DEFAULT,
+            Home.fromEnv(),
+            System.workingDirectory()
+        );
+    }
+
+    Shell shell() {
+        return this.shell;
+    }
+
+    String compiler() {
+        return this.compiler;
+    }
+
+    String workingDirectory() {
+        return this.workingDirectory;
+    }
+
+    mut &mut Sources sources() {
+        return &mut this.sources;
+    }
+
+    Manifest manifest() throws KrelpException {
+        return Manifest.find(this.workingDirectory, this.shell);
+    }
+
+    mut Project load(&LockOptions options) throws KrelpException {
+        return this.resolve(this.manifest(), options);
+    }
+
+    mut Project resolve(Manifest manifest, &LockOptions options) throws KrelpException {
+        Lockfile? lock = Lockfile.read(manifest.dir());
+        String? before = lock?.toToml();
+        Resolution resolution;
+        {
+            Resolver resolver = new Resolver(&mut this.sources, this.shell, lock, options.updateAll(), options.update());
+            resolution = resolver.resolve(&manifest);
+        }
+        resolution.fetch(this.sources.git(), this.shell);
+        Lockfile after = resolution.lockfile();
+        if (options.locked() && (before == null || before != after.toToml())) {
+            throw new KrelpException(
+                "`${Lockfile.FILE}` needs to change, but `--locked` forbids it",
+                "run the command without `--locked` to update it"
+            );
+        }
+        after.write(manifest.dir());
+        return new Project(manifest, resolution);
+    }
+
+    private static String? env(String name) {
+        String? value = System.env(name);
+        return value != null && !value.isEmpty() ? value : null;
+    }
+}

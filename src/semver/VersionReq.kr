@@ -3,15 +3,7 @@ package krelp.semver;
 import std.util.ArrayList;
 import std.util.List;
 
-final class VersionReq {
-    private String text;
-    private List<Bound> bounds;
-
-    private VersionReq(String text, List<Bound> bounds) {
-        this.text = text;
-        this.bounds = bounds;
-    }
-
+record VersionReq(String text, List<Bound> bounds) {
     static VersionReq any() {
         return new VersionReq("*", new ArrayList<>());
     }
@@ -27,9 +19,32 @@ final class VersionReq {
         if (trimmed.isEmpty()) {
             throw new SemverException("the version requirement is empty; use `*` to accept any version");
         }
+        String[] prefixes = {">=", "<=", ">", "<", "=", "^", "~"};
         List<Bound> bounds = new ArrayList<>();
-        for (String part : trimmed.split(",")) {
-            VersionReq.condition(part.trim(), text, &mut bounds);
+        for (String condition : trimmed.split(",")) {
+            String part = condition.trim();
+            if (part.isEmpty()) {
+                throw new SemverException("`$text` has an empty condition between commas");
+            }
+            String op = "^";
+            String rest = part;
+            for (String prefix : prefixes) {
+                String? stripped = part.stripPrefix(prefix);
+                if (stripped != null) {
+                    op = prefix;
+                    rest = stripped.trim();
+                    break;
+                }
+            }
+            if (rest == "*") {
+                if (op != "^") {
+                    throw new SemverException("`$text` combines `$op` with `*`");
+                }
+                continue;
+            }
+            for (Bound bound : Partial.parse(rest, text).bounds(op, text)) {
+                bounds.add(bound);
+            }
         }
         return new VersionReq(trimmed, bounds);
     }
@@ -59,74 +74,11 @@ final class VersionReq {
         return false;
     }
 
-    &List<Bound> bounds() {
-        return &this.bounds;
+    boolean acceptsAny() {
+        return this.bounds.isEmpty();
     }
 
     String toString() {
         return this.text;
-    }
-
-    private static void condition(String part, String text, &mut List<Bound> bounds) throws SemverException {
-        if (part.isEmpty()) {
-            throw new SemverException("`$text` has an empty condition between commas");
-        }
-        String rest = part;
-        String op = "^";
-        String[] prefixes = {">=", "<=", ">", "<", "=", "^", "~"};
-        for (String prefix : prefixes) {
-            String? stripped = part.stripPrefix(prefix);
-            if (stripped != null) {
-                op = prefix;
-                rest = stripped.trim();
-                break;
-            }
-        }
-        if (rest == "*") {
-            if (op != "^") {
-                throw new SemverException("`$text` combines `$op` with `*`");
-            }
-            return;
-        }
-        Partial partial = Partial.parse(rest, text);
-        if (partial.wildcard() && op != "^") {
-            throw new SemverException("`$text` combines `$op` with a wildcard");
-        }
-        if (op == "^") {
-            if (partial.wildcard()) {
-                VersionReq.range(bounds, partial.lower(), partial.bumpLast());
-            } else {
-                VersionReq.range(bounds, partial.lower(), partial.caretUpper());
-            }
-        } else if (op == "~") {
-            VersionReq.range(bounds, partial.lower(), partial.tildeUpper());
-        } else if (op == "=") {
-            if (partial.complete()) {
-                bounds.add(new Bound(Op.EXACT, partial.lower()));
-            } else {
-                VersionReq.range(bounds, partial.lower(), partial.bumpLast());
-            }
-        } else if (op == ">=") {
-            bounds.add(new Bound(Op.GREATER_EQ, partial.lower()));
-        } else if (op == ">") {
-            if (partial.complete()) {
-                bounds.add(new Bound(Op.GREATER, partial.lower()));
-            } else {
-                bounds.add(new Bound(Op.GREATER_EQ, partial.bumpLast()));
-            }
-        } else if (op == "<") {
-            bounds.add(new Bound(Op.LESS, partial.lower()));
-        } else {
-            if (partial.complete()) {
-                bounds.add(new Bound(Op.LESS_EQ, partial.lower()));
-            } else {
-                bounds.add(new Bound(Op.LESS, partial.bumpLast()));
-            }
-        }
-    }
-
-    private static void range(&mut List<Bound> bounds, Version lower, Version upper) {
-        bounds.add(new Bound(Op.GREATER_EQ, lower));
-        bounds.add(new Bound(Op.LESS, upper));
     }
 }

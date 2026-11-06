@@ -13,17 +13,12 @@ final class Compiler {
     private String? edition;
     private List<Library> libraries;
 
-    Compiler(String crateName, String input, String? edition, List<Library> libraries) {
-        this.program = Compiler.program();
+    Compiler(String program, String crateName, String input, String? edition, List<Library> libraries) {
+        this.program = program;
         this.crateName = crateName;
         this.input = input;
         this.edition = edition;
         this.libraries = libraries;
-    }
-
-    static String program() {
-        String? configured = System.env("KRELPINC");
-        return configured != null && !configured.isEmpty() ? configured : "krelpinc";
     }
 
     boolean run(Goal goal, Profile profile, boolean library, String output) throws KrelpException {

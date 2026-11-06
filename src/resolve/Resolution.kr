@@ -4,7 +4,7 @@ import krelp.lock.LockedPackage;
 import krelp.lock.Lockfile;
 import krelp.manifest.Dependency;
 import krelp.manifest.Manifest;
-import krelp.source.Git;
+import krelp.source.GitCache;
 import krelp.source.SourceId;
 import krelp.util.Fs;
 import krelp.util.KrelpException;
@@ -16,8 +16,13 @@ import std.util.List;
 final class Resolution {
     private List<Node> nodes;
 
-    Resolution(List<Node> nodes) {
-        this.nodes = nodes;
+    Resolution(Node root) {
+        this.nodes = new ArrayList<>();
+        this.nodes.add(root);
+    }
+
+    mut void add(Node node) {
+        this.nodes.add(node);
     }
 
     &Node root() {
@@ -37,29 +42,27 @@ final class Resolution {
         return null;
     }
 
-    mut void fetch() throws KrelpException {
+    mut void fetch(&mut GitCache git, Shell shell) throws KrelpException {
         for (int i = 1; i < this.nodes.size(); i++) {
-            if (!this.nodes.get(i).dir().isEmpty()) {
+            &Node node = this.nodes.get(i);
+            String? repository = node.repository();
+            String? commit = node.commit();
+            if (node.isFetched() || repository == null || commit == null) {
                 continue;
             }
-            String name = this.nodes.get(i).name();
-            String? repository = this.nodes.get(i).repository();
-            String? commit = this.nodes.get(i).commit();
-            if (repository == null || commit == null) {
-                continue;
+            if (!git.isCheckedOut(repository, commit)) {
+                shell.status("Downloading", node.toString());
             }
-            if (!Git.isCheckedOut(repository, commit)) {
-                Shell.status("Downloading", this.nodes.get(i).toString());
-            }
-            String dir = Git.checkout(repository, commit);
-            Manifest manifest = Manifest.read(dir);
-            if (manifest.name() != name || manifest.version() != this.nodes.get(i).version()) {
+            String dir = git.checkout(repository, commit);
+            Manifest manifest = Manifest.read(dir, shell);
+            if (manifest.name() != node.name() || manifest.version() != node.version()) {
                 throw new KrelpException(
-                    "the registry says `$repository` holds `$name` v${this.nodes.get(i).version()} "
+                    "the registry says `$repository` holds `${node.name()}` v${node.version()} "
                     + "at commit $commit, but it holds `${manifest.name()}` v${manifest.version()}"
                 );
             }
-            this.nodes.getMut(i).setDir(dir);
+            Node fetched = node.copy() with { dir = dir };
+            this.nodes.set(i, fetched);
         }
     }
 
@@ -81,10 +84,7 @@ final class Resolution {
         String rootDir = this.root().dir();
         for (int i = 1; i < this.nodes.size(); i++) {
             &Node node = this.nodes.get(i);
-            List<String> deps = new ArrayList<>();
-            for (&Dependency dep : node.dependencies()) {
-                deps.add(dep.name());
-            }
+            List<String> deps = node.dependencyNames();
             deps.sort();
             SourceId source = switch (node.source()) {
                 case Path(String dir) -> SourceId.Path(Fs.relative(rootDir, dir));
@@ -131,17 +131,13 @@ final class Resolution {
                 default -> node.source().describe();
             };
             String shown = origin.isEmpty() ? node.toString() : "${node} ($origin)";
-            boolean again = Resolution.contains(seen, &node.name());
+            boolean again = seen.contains(&node.name());
             out.appendLine("$indent${last ? "└── " : "├── "}$shown${again ? " (*)" : ""}");
             if (again) {
                 continue;
             }
             seen.add(node.name());
-            List<String> children = new ArrayList<>();
-            for (&Dependency dep : node.dependencies()) {
-                children.add(dep.name());
-            }
-            this.branches(out, &children, indent + (last ? "    " : "│   "), seen);
+            this.branches(out, &node.dependencyNames(), indent + (last ? "    " : "│   "), seen);
         }
     }
 
@@ -150,7 +146,7 @@ final class Resolution {
             if (dep.dev() && !dev) {
                 continue;
             }
-            if (Resolution.contains(reached, &dep.name())) {
+            if (reached.contains(&dep.name())) {
                 continue;
             }
             reached.add(dep.name());
@@ -159,14 +155,5 @@ final class Resolution {
                 this.reach(child, false, reached);
             }
         }
-    }
-
-    private static boolean contains(&List<String> names, &String name) {
-        for (&String other : names) {
-            if (other == name) {
-                return true;
-            }
-        }
-        return false;
     }
 }

@@ -60,8 +60,8 @@ final class TomlParser {
         }
         String shown = TomlWriter.path(&path);
         String? problem = array
-            ? TomlParser.appendTable(&mut this.root, &path)
-            : TomlParser.defineTable(&mut this.root, &path);
+            ? this.root.appendTable(&path)
+            : this.root.defineTable(&path);
         if (problem != null) {
             throw this.errorAt(line, column, problem.replace("#", shown));
         }
@@ -76,7 +76,7 @@ final class TomlParser {
         this.expect('=', "after the key `${TomlWriter.path(&key)}`");
         this.skipSpaces();
         TomlValue value = this.value();
-        String? problem = TomlParser.insert(&mut this.root, &this.current, &key, value);
+        String? problem = this.root.insert(&this.current, &key, value);
         if (problem != null) {
             throw this.errorAt(line, column, problem);
         }
@@ -91,9 +91,9 @@ final class TomlParser {
                 parts.add(this.basicString());
             } else if (c == '\'') {
                 parts.add(this.literalString());
-            } else if (TomlParser.isBareKeyChar(c)) {
+            } else if (TomlWriter.isBareKeyChar(c)) {
                 StringBuilder bare = new StringBuilder();
-                while (!this.atEnd() && TomlParser.isBareKeyChar(this.peek())) {
+                while (!this.atEnd() && TomlWriter.isBareKeyChar(this.peek())) {
                     bare.append(this.advance());
                 }
                 parts.add(bare.toString());
@@ -183,7 +183,7 @@ final class TomlParser {
             this.expect('=', "after the key `${TomlWriter.path(&key)}`");
             this.skipSpaces();
             TomlValue value = this.value();
-            String? problem = TomlParser.insert(&mut table, &here, &key, value);
+            String? problem = table.insert(&here, &key, value);
             if (problem != null) {
                 throw this.errorAt(line, column, problem);
             }
@@ -301,6 +301,19 @@ final class TomlParser {
             value = next;
         }
         return TomlValue.Integer(value);
+    }
+
+    private static boolean isDate(String literal) {
+        char[] chars = literal.chars();
+        if (chars.length < 10 || chars[4] != '-' || chars[7] != '-') {
+            return false;
+        }
+        for (int i = 0; i < 10; i++) {
+            if (i != 4 && i != 7 && (chars[i] < '0' || chars[i] > '9')) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private static boolean underscoresValid(String text) {
@@ -473,168 +486,6 @@ final class TomlParser {
         }
     }
 
-    private static String? defineTable(&mut TomlTable root, &List<String> path) {
-        (&mut TomlTable)? table = TomlParser.walk(root, path, path.size(), true);
-        if (table == null) {
-            return "`[#]` cannot be defined here, because a key in its path is not a table";
-        }
-        if (table.isDefined()) {
-            return "the table `[#]` is defined twice";
-        }
-        if (table.isInline()) {
-            return "the table `[#]` was written inline and cannot be extended";
-        }
-        table.markDefined();
-        return null;
-    }
-
-    private static String? appendTable(&mut TomlTable root, &List<String> path) {
-        (&mut TomlTable)? parent = TomlParser.walk(root, path, path.size() - 1, true);
-        if (parent == null) {
-            return "`[[#]]` cannot be defined here, because a key in its path is not a table";
-        }
-        String last = path.get(path.size() - 1);
-        String qualified = parent.qualify(last);
-        (&mut TomlValue)? existing = parent.getMut(&last);
-        if (existing == null) {
-            List<TomlValue> items = new ArrayList<>();
-            items.add(TomlValue.Table(new TomlTable("$qualified[0]")));
-            parent.put(last, TomlValue.Array(items));
-            return null;
-        }
-        return switch (existing) {
-            case Array(List<TomlValue> items) -> TomlParser.appendTo(&mut items, &qualified);
-            default -> "`[[#]]` conflicts with the key `$qualified`, which is not an array";
-        };
-    }
-
-    private static String? appendTo(&mut List<TomlValue> items, &String qualified) {
-        for (&TomlValue item : items) {
-            boolean isTable = switch (item) {
-                case Table(TomlTable table) -> !table.isInline();
-                default -> false;
-            };
-            if (!isTable) {
-                return "`[[#]]` conflicts with the array `$qualified`, which was written inline";
-            }
-        }
-        items.add(TomlValue.Table(new TomlTable("$qualified[${items.size()}]")));
-        return null;
-    }
-
-    private static String? insert(
-        &mut TomlTable root,
-        &List<String> current,
-        &List<String> key,
-        TomlValue value
-    ) {
-        (&mut TomlTable)? table = TomlParser.walk(root, current, current.size(), false);
-        if (table == null) {
-            return "the current table cannot hold keys";
-        }
-        (&mut TomlTable)? target = TomlParser.walk(table, key, key.size() - 1, true);
-        if (target == null) {
-            return "the key `${TomlWriter.path(key)}` goes through a value that is not a table";
-        }
-        String last = key.get(key.size() - 1);
-        if (target.contains(&last)) {
-            return "the key `${target.qualify(last)}` is defined twice";
-        }
-        if (target.isInline()) {
-            return "an inline table cannot be extended";
-        }
-        TomlParser.rebase(&mut value, target.qualify(last));
-        target.put(last, value);
-        return null;
-    }
-
-    private static void rebase(&mut TomlValue value, String path) {
-        switch (value) {
-            case Table(TomlTable table) -> {
-                table.setPath(path);
-                List<String> keys = new ArrayList<>();
-                for (&String key : table.keys()) {
-                    keys.add(key);
-                }
-                for (&String key : &keys) {
-                    String child = table.qualify(key);
-                    (&mut TomlValue)? inner = table.getMut(key);
-                    if (inner != null) {
-                        TomlParser.rebase(inner, child);
-                    }
-                }
-            }
-            case Array(List<TomlValue> items) -> {
-                for (int i = 0; i < items.size(); i++) {
-                    TomlParser.rebase(items.getMut(i), path);
-                }
-            }
-            default -> {}
-        }
-    }
-
-    private static boolean isDate(String literal) {
-        char[] chars = literal.chars();
-        if (chars.length < 10 || chars[4] != '-' || chars[7] != '-') {
-            return false;
-        }
-        for (int i = 0; i < 10; i++) {
-            if (i != 4 && i != 7 && (chars[i] < '0' || chars[i] > '9')) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private static (&mut TomlTable)? walk(
-        &mut TomlTable table,
-        &List<String> path,
-        int count,
-        boolean create
-    ) borrows table {
-        if (count == 0) {
-            return table;
-        }
-        String step = path.get(0);
-        if (!table.contains(&step)) {
-            if (!create) {
-                return null;
-            }
-            table.put(step, TomlValue.Table(new TomlTable(table.qualify(step))));
-        }
-        List<String> rest = new ArrayList<>();
-        for (int i = 1; i < path.size(); i++) {
-            rest.add(path.get(i));
-        }
-        (&mut TomlValue)? value = table.getMut(&step);
-        if (value == null) {
-            return null;
-        }
-        return switch (value) {
-            case Table(TomlTable inner) -> TomlParser.walk(&mut inner, &rest, count - 1, create);
-            case Array(List<TomlValue> items) -> TomlParser.walkLast(&mut items, &rest, count - 1, create);
-            default -> null;
-        };
-    }
-
-    private static (&mut TomlTable)? walkLast(
-        &mut List<TomlValue> items,
-        &List<String> path,
-        int count,
-        boolean create
-    ) borrows items {
-        if (items.isEmpty()) {
-            return null;
-        }
-        (&mut TomlValue) last = items.getMut(items.size() - 1);
-        return switch (last) {
-            case Table(TomlTable inner) -> inner.isInline()
-                ? null
-                : TomlParser.walk(&mut inner, path, count, create);
-            default -> null;
-        };
-    }
-
     private boolean atEnd() {
         return this.pos >= this.chars.length;
     }
@@ -750,10 +601,5 @@ final class TomlParser {
 
     private TomlException errorAt(int line, int column, String message) {
         return new TomlException("${this.file}:$line:$column: $message");
-    }
-
-    private static boolean isBareKeyChar(char c) {
-        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
-            || c == '_' || c == '-';
     }
 }

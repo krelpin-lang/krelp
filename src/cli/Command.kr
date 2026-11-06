@@ -1,0 +1,109 @@
+package krelp.cli;
+
+enum Command {
+    NEW, INIT, BUILD, CHECK, RUN, TEST, ADD, REMOVE, UPDATE, TREE, PUBLISH, CLEAN, HELP;
+
+    static Command? parse(String word) {
+        for (Command command : Command.values()) {
+            if (command.word() == word) {
+                return command;
+            }
+        }
+        return null;
+    }
+
+    static String overview() {
+        StringBuilder out = new StringBuilder();
+        out.appendLine("krelp, the Krelpin package manager");
+        out.appendLine("");
+        out.appendLine("Usage: krelp [-q] COMMAND [ARGS]");
+        out.appendLine("");
+        out.appendLine("Commands:");
+        for (Command command : Command.values()) {
+            String word = command.word();
+            out.appendLine("    $word${" ".repeat(9 - word.length())}${command.summary()}");
+        }
+        out.appendLine("");
+        out.appendLine("Options:");
+        out.appendLine("    -q, --quiet    Print only errors and warnings");
+        out.appendLine("    -V, --version  Print the version of krelp");
+        out.appendLine("");
+        out.appendLine("Environment:");
+        out.appendLine("    KRELPINC        The compiler to run (default: krelpinc on the PATH)");
+        out.appendLine("    KRELP_HOME      Where downloads are kept (default: ~/.krelp)");
+        out.appendLine("    KRELP_REGISTRY  The git URL of the registry index");
+        return out.toString();
+    }
+
+    String word() {
+        return this.name().toLowerCase();
+    }
+
+    boolean builds() {
+        return this == Command.BUILD || this == Command.CHECK || this == Command.RUN || this == Command.TEST;
+    }
+
+    String summary() {
+        return switch (this) {
+            case NEW -> "Create a package in a new directory";
+            case INIT -> "Create a package in the current directory";
+            case BUILD -> "Compile the package and its dependencies";
+            case CHECK -> "Check the package for errors without building it";
+            case RUN -> "Build and run the program";
+            case TEST -> "Build and run the tests";
+            case ADD -> "Add a dependency to krelp.toml";
+            case REMOVE -> "Remove a dependency from krelp.toml";
+            case UPDATE -> "Update the versions in krelp.lock";
+            case TREE -> "Show the dependency tree";
+            case PUBLISH -> "Publish the library to the registry";
+            case CLEAN -> "Remove the target directory";
+            case HELP -> "Show help for a command";
+        };
+    }
+
+    String help() {
+        String build = "    -r, --release  Build optimized, into target/release\n"
+            + "        --locked   Fail if krelp.lock would have to change\n";
+        return switch (this) {
+            case NEW -> "Usage: krelp new [--lib] [--name NAME] DIR\n\n"
+                + "Creates the directory DIR with a new package in it: a program, or a\n"
+                + "library with --lib. The package is named after DIR unless --name is given.\n";
+            case INIT -> "Usage: krelp init [--lib] [--name NAME]\n\n"
+                + "Creates a package in the current directory: a program, or a library with --lib.\n";
+            case BUILD -> "Usage: krelp build [--release] [--locked]\n\n"
+                + "Compiles the package and its dependencies. A program is written to\n"
+                + "target/debug/NAME, a library to target/debug/libNAME.rlib.\n\n" + build;
+            case CHECK -> "Usage: krelp check [--release] [--locked]\n\n"
+                + "Checks the package and its dependencies for errors, without producing code.\n\n" + build;
+            case RUN -> "Usage: krelp run [--release] [--locked] [-- ARGS...]\n\n"
+                + "Builds the program and runs it with ARGS. krelp exits with its exit status.\n\n" + build;
+            case TEST -> "Usage: krelp test [--release] [--locked]\n\n"
+                + "Builds and runs the @Test methods in src, and those in tests, a source\n"
+                + "directory of package `tests` that uses the package as a library. Tests\n"
+                + "may use the dev-dependencies.\n\n" + build;
+            case ADD -> "Usage: krelp add NAME[@VERSION] [--dev]\n"
+                + "       krelp add NAME --path DIR [--dev]\n"
+                + "       krelp add NAME --git URL [--branch B | --tag T | --rev R] [--dev]\n\n"
+                + "Adds a dependency to krelp.toml, or replaces the one of the same name.\n"
+                + "Without VERSION, the newest version in the registry is added.\n\n"
+                + "    --dev  Add it to [dev-dependencies], for the tests only\n";
+            case REMOVE -> "Usage: krelp remove [--dev] NAME...\n\n"
+                + "Removes dependencies from krelp.toml.\n\n"
+                + "    --dev  Remove them only from [dev-dependencies]\n";
+            case UPDATE -> "Usage: krelp update [NAME...]\n\n"
+                + "Picks the newest versions that krelp.toml allows and writes them to\n"
+                + "krelp.lock: of the packages named, or of every package.\n";
+            case TREE -> "Usage: krelp tree [--locked]\n\n"
+                + "Shows the packages the package depends on, directly and indirectly.\n"
+                + "A package shown before is marked (*).\n";
+            case PUBLISH -> "Usage: krelp publish [--dry-run] [--allow-dirty]\n\n"
+                + "Records in the registry index that this version of the library is the\n"
+                + "current commit of its git repository, and pushes the index. The commit\n"
+                + "must already be pushed. Dependencies must come from the registry.\n\n"
+                + "    --dry-run      Check everything, but change nothing\n"
+                + "    --allow-dirty  Publish even if there are uncommitted changes\n";
+            case CLEAN -> "Usage: krelp clean\n\nRemoves the target directory.\n";
+            case HELP -> "Usage: krelp help [COMMAND]\n\nShows help for krelp or for a command.\n";
+        };
+    }
+}

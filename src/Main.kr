@@ -4,6 +4,6 @@ import krelp.cli.Cli;
 
 class Main {
     static void main(String[] args) {
-        System.exit(Cli.main(&args));
+        System.exit(new Cli().run(&args));
     }
 }

@@ -2,331 +2,148 @@ package krelp.resolve;
 
 import krelp.lock.LockedPackage;
 import krelp.lock.Lockfile;
-import krelp.manifest.DepKind;
 import krelp.manifest.Dependency;
 import krelp.manifest.GitRef;
 import krelp.manifest.Manifest;
 import krelp.semver.Version;
-import krelp.semver.VersionReq;
-import krelp.source.Git;
-import krelp.source.Index;
 import krelp.source.IndexEntry;
 import krelp.source.SourceId;
-import krelp.util.Fs;
+import krelp.source.Sources;
 import krelp.util.KrelpException;
-import std.io.Files;
-import std.io.IOException;
+import krelp.util.Shell;
 import std.util.ArrayList;
 import std.util.List;
 
-final class Resolver {
+final class Resolver borrows sources {
     private static int ROUNDS = 32;
 
+    private &mut Sources sources;
+    private Shell shell;
     private Lockfile? lock;
     private boolean unlockAll;
     private List<String> unlocked;
-    private Index index;
     private List<Demand> hints;
 
-    Resolver(Lockfile? lock, boolean unlockAll, &List<String> unlocked, Index index) {
+    Resolver(&mut Sources sources, Shell shell, Lockfile? lock, boolean unlockAll, &List<String> unlocked)
+        keeps sources {
+        this.sources = sources;
+        this.shell = shell;
         this.lock = lock;
         this.unlockAll = unlockAll;
         this.unlocked = new ArrayList<>();
         for (&String name : unlocked) {
             this.unlocked.add(name);
         }
-        this.index = index;
         this.hints = new ArrayList<>();
     }
 
     mut Resolution resolve(&Manifest root) throws KrelpException {
         for (int round = 0; round < Resolver.ROUNDS; round++) {
-            List<Node> nodes = new ArrayList<>();
             List<Demand> demands = new ArrayList<>();
             List<Dependency> rootDeps = new ArrayList<>();
             for (&Dependency dep : root.dependencies()) {
                 rootDeps.add(dep.copy());
             }
             this.demand(&mut demands, root.name(), root.dir(), &rootDeps);
-            nodes.add(new Node(
+            Resolution graph = new Resolution(new Node(
                 root.name(), root.version(), SourceId.Root, null, null, root.dir(), rootDeps
             ));
             boolean settled = true;
-            int next = 0;
-            while (next < demands.size()) {
+            for (int next = 0; next < demands.size(); next++) {
                 String name = demands.get(next).name();
-                next++;
                 if (name == root.name()) {
                     throw new KrelpException(
-                        "`${demands.get(next - 1).from()}` depends on `$name`, the package being built",
+                        "`${demands.get(next).from()}` depends on `$name`, the package being built",
                         "a package cannot depend on itself, even through other packages"
                     );
                 }
-                int found = Resolver.indexOf(&nodes, &name);
-                if (found >= 0) {
-                    if (!Resolver.fits(nodes.get(found), demands.get(next - 1))) {
-                        settled = false;
-                    }
+                (&Node)? found = graph.find(&name);
+                if (found != null) {
+                    settled = found.satisfies(demands.get(next)) && settled;
                     continue;
                 }
-                Node node = this.choose(&name, &demands);
+                Node node = this.choose(Requirements.of(&name, &demands, &this.hints));
                 this.demand(&mut demands, name, node.dir(), node.dependencies());
-                nodes.add(node);
+                graph.add(node);
             }
             if (settled) {
-                return new Resolution(nodes);
+                return graph;
             }
             this.hints = demands;
         }
         throw new KrelpException("the dependencies could not be resolved after ${Resolver.ROUNDS} attempts");
     }
 
-    private mut void demand(&mut List<Demand> demands, String from, String dir, &List<Dependency> deps)
+    private void demand(&mut List<Demand> demands, String from, String dir, &List<Dependency> deps)
         throws KrelpException {
+        String registry = this.sources.registry();
         for (&Dependency dep : deps) {
-            SourceId source = this.sourceOf(from, dir, dep);
-            demands.add(new Demand(from, dep.name(), source, dep.req().copy()));
+            demands.add(new Demand(from, dep.name(), dep.sourceFrom(from, dir, registry), dep.req().copy()));
         }
     }
 
-    private SourceId sourceOf(String from, String dir, &Dependency dep) throws KrelpException {
-        return switch (dep.kind()) {
-            case Path(String path) -> {
-                String resolved = Fs.resolve(dir, path);
-                if (!Files.isDirectory(resolved)) {
-                    throw new KrelpException(
-                        "`$from` depends on `${dep.name()}` at `$path`, but `$resolved` is not a directory"
-                    );
-                }
-                yield SourceId.Path(resolved);
-            }
-            case Git(String url, GitRef ref) -> SourceId.Git(Resolver.gitUrl(dir, url), ref);
-            case Registry -> SourceId.Registry(this.index.url());
+    private mut Node choose(Requirements wanted) throws KrelpException {
+        return switch (wanted.source()) {
+            case Path(String dir) -> this.local(&wanted, dir, null);
+            case Git(String url, GitRef ref) -> this.git(&wanted, url, &ref);
+            case Registry(String index) -> this.registry(&wanted);
+            case Root -> throw new KrelpException("`${wanted.name()}` cannot be the root package");
         };
     }
 
-    private static String gitUrl(String dir, String url) {
-        if (url.contains("://") || url.contains("@") || url.startsWith("/")) {
-            return url;
-        }
-        String resolved = Fs.resolve(dir, url);
-        return Files.isDirectory(resolved) ? resolved : url;
-    }
-
-    private mut Node choose(&String name, &List<Demand> demands) throws KrelpException {
-        List<Demand> mine = new ArrayList<>();
-        for (&Demand demand : demands) {
-            if (demand.name() == name) {
-                mine.add(Resolver.copy(demand));
-            }
-        }
-        SourceId source = mine.get(0).source();
-        String key = source.key();
-        for (&Demand demand : &mine) {
-            if (demand.source().key() != key) {
-                throw Resolver.conflict(name, mine.get(0), demand);
-            }
-        }
-        for (&Demand hint : &this.hints) {
-            if (hint.name() == name && hint.source().key() == key && !Resolver.hasDemandFrom(&mine, &hint.from())) {
-                mine.add(Resolver.copy(hint));
-            }
-        }
-        return switch (source) {
-            case Path(String dir) -> Resolver.local(name, &source, dir, null, &mine);
-            case Git(String url, GitRef ref) -> this.git(name, &source, url, &ref, &mine);
-            case Registry(String index) -> this.registry(name, &mine);
-            case Root -> throw new KrelpException("`$name` cannot be the root package");
-        };
-    }
-
-    private mut Node git(&String name, &SourceId source, String url, &GitRef ref, &List<Demand> mine)
-        throws KrelpException {
-        (&LockedPackage)? locked = this.locked(name, source);
+    private mut Node git(&Requirements wanted, String url, &GitRef ref) throws KrelpException {
+        (&LockedPackage)? locked = this.locked(wanted);
         String? pinned = locked != null ? locked.commit() : null;
-        String commit = pinned ?: Git.resolve(url, ref, this.unlocking(name));
-        String dir = Git.checkout(url, commit);
-        return Resolver.local(name, source, dir, commit, mine);
+        boolean refresh = this.unlocking(&wanted.name());
+        String commit = pinned ?: this.sources.git().resolve(url, ref, refresh);
+        String dir = this.sources.git().checkout(url, commit);
+        return this.local(wanted, dir, commit);
     }
 
-    private static Node local(&String name, &SourceId source, String dir, String? commit, &List<Demand> mine)
-        throws KrelpException {
-        Manifest manifest = Manifest.read(dir);
-        if (manifest.name() != name) {
-            throw new KrelpException(
-                "`${mine.get(0).from()}` depends on `$name`, but `$dir` holds the package `${manifest.name()}`"
-            );
-        }
-        if (manifest.isProgram()) {
-            throw new KrelpException(
-                "`${mine.get(0).from()}` depends on `$name`, which is a program, not a library",
-                "a library has no `src/Main.kr`"
-            );
-        }
-        for (&Demand demand : mine) {
-            if (!demand.req().matches(manifest.version())) {
-                throw new KrelpException(
-                    "`${demand.from()}` needs `$name` ${demand.req()}, but `$dir` holds version ${manifest.version()}"
-                );
-            }
-        }
+    private Node local(&Requirements wanted, String dir, String? commit) throws KrelpException {
+        Manifest manifest = Manifest.read(dir, this.shell);
+        wanted.checkLocal(&manifest, &dir);
         List<Dependency> deps = new ArrayList<>();
         for (&Dependency dep : manifest.dependencies()) {
             if (!dep.dev()) {
                 deps.add(dep.copy());
             }
         }
-        return new Node(name, manifest.version(), source, commit, null, dir, deps);
+        return new Node(wanted.name(), manifest.version(), wanted.source(), commit, null, dir, deps);
     }
 
-    private mut Node registry(&String name, &List<Demand> mine) throws KrelpException {
-        SourceId source = SourceId.Registry(this.index.url());
-        (&LockedPackage)? locked = this.locked(name, &source);
+    private mut Node registry(&Requirements wanted) throws KrelpException {
+        (&LockedPackage)? locked = this.locked(wanted);
         Version? preferred = locked != null ? locked.version() : null;
-        if (preferred == null && !this.index.isFresh()) {
-            this.index.update();
+        if (preferred == null) {
+            this.sources.index().update();
         }
-        List<IndexEntry> entries = this.index.versions(name);
-        int pick = Resolver.pick(&entries, mine, preferred);
-        if (pick < 0 && !this.index.isFresh()) {
-            this.index.update();
-            entries = this.index.versions(name);
-            pick = Resolver.pick(&entries, mine, preferred);
+        List<IndexEntry> entries = this.sources.index().versions(wanted.name());
+        int pick = wanted.pick(&entries, preferred);
+        if (pick < 0 && !this.sources.index().isFresh()) {
+            this.sources.index().update();
+            entries = this.sources.index().versions(wanted.name());
+            pick = wanted.pick(&entries, preferred);
         }
         if (pick < 0) {
-            throw Resolver.unmet(name, &entries, mine);
+            throw wanted.unmet(&entries);
         }
         &IndexEntry entry = entries.get(pick);
         List<Dependency> deps = new ArrayList<>();
         for (&Dependency dep : entry.dependencies()) {
             deps.add(dep.copy());
         }
-        return new Node(name, entry.version(), source, entry.rev(), entry.git(), "", deps);
+        return new Node(wanted.name(), entry.version(), wanted.source(), entry.rev(), entry.git(), "", deps);
     }
 
-    private static int pick(&List<IndexEntry> entries, &List<Demand> mine, Version? preferred) {
-        int best = -1;
-        for (int i = 0; i < entries.size(); i++) {
-            &IndexEntry entry = entries.get(i);
-            boolean isPreferred = preferred != null && entry.version() == preferred;
-            if (entry.yanked() && !isPreferred) {
-                continue;
-            }
-            boolean ok = true;
-            for (&Demand demand : mine) {
-                if (!demand.req().matches(entry.version())) {
-                    ok = false;
-                }
-            }
-            if (!ok) {
-                continue;
-            }
-            if (isPreferred) {
-                return i;
-            }
-            if (best < 0 || entry.version().compareTo(entries.get(best).version()) > 0) {
-                best = i;
-            }
-        }
-        return best;
-    }
-
-    private (&LockedPackage)? locked(&String name, &SourceId source) {
-        if (this.unlocking(name)) {
+    private (&LockedPackage)? locked(&Requirements wanted) {
+        if (this.unlocking(&wanted.name())) {
             return null;
         }
-        (&LockedPackage)? locked = this.lock?.find(name);
-        if (locked == null || locked.source().key() != source.key()) {
-            return null;
-        }
-        return locked;
+        return this.lock?.findFrom(&wanted.name(), &wanted.source());
     }
 
     private boolean unlocking(&String name) {
-        if (this.unlockAll) {
-            return true;
-        }
-        for (&String other : &this.unlocked) {
-            if (other == name) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static boolean fits(&Node node, &Demand demand) throws KrelpException {
-        if (node.source().key() != demand.source().key()) {
-            throw new KrelpException(
-                "`${demand.from()}` needs `${node.name()}` from ${Resolver.origin(&demand.source())}, "
-                + "but another package needs it from ${Resolver.origin(&node.source())}",
-                "a build holds only one package of each name; make both use the same source"
-            );
-        }
-        return demand.req().matches(&node.version());
-    }
-
-    private static KrelpException conflict(&String name, &Demand first, &Demand second) {
-        return new KrelpException(
-            "`${first.from()}` needs `$name` from ${Resolver.origin(first.source())}, "
-            + "but `${second.from()}` needs it from ${Resolver.origin(second.source())}",
-            "a build holds only one package of each name; make both use the same source"
-        );
-    }
-
-    private static KrelpException unmet(&String name, &List<IndexEntry> entries, &List<Demand> mine) {
-        if (entries.isEmpty()) {
-            return new KrelpException(
-                "`${mine.get(0).from()}` depends on `$name`, which is not in the registry",
-                "check the name, or use a `path` or `git` dependency"
-            );
-        }
-        StringBuilder needs = new StringBuilder();
-        for (&Demand demand : mine) {
-            needs.append("\n    `${demand.from()}` needs $name ${demand.req()}");
-        }
-        StringBuilder published = new StringBuilder();
-        for (&IndexEntry entry : entries) {
-            if (!entry.yanked()) {
-                if (!published.isEmpty()) {
-                    published.append(", ");
-                }
-                published.append(entry.version().toString());
-            }
-        }
-        return new KrelpException(
-            "no version of `$name` meets every requirement:$needs",
-            "the registry has ${published.isEmpty() ? "no versions that are not yanked" : published.toString()}"
-        );
-    }
-
-    private static String origin(&SourceId source) {
-        return switch (source) {
-            case Root -> "the package being built";
-            case Path(String dir) -> "`$dir`";
-            case Git(String url, GitRef ref) -> "`$url` ($ref)";
-            case Registry(String index) -> "the registry";
-        };
-    }
-
-    private static boolean hasDemandFrom(&List<Demand> demands, &String from) {
-        for (&Demand demand : demands) {
-            if (demand.from() == from) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private static Demand copy(&Demand demand) {
-        return new Demand(demand.from(), demand.name(), demand.source(), demand.req().copy());
-    }
-
-    private static int indexOf(&List<Node> nodes, &String name) {
-        for (int i = 0; i < nodes.size(); i++) {
-            if (nodes.get(i).name() == name) {
-                return i;
-            }
-        }
-        return -1;
+        return this.unlockAll || this.unlocked.contains(name);
     }
 }

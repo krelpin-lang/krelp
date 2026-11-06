@@ -1,5 +1,6 @@
 package krelp.toml;
 
+import std.util.ArrayList;
 import std.util.List;
 
 enum TomlValue {
@@ -8,5 +9,88 @@ enum TomlValue {
     Float(double value),
     Bool(boolean value),
     Array(List<TomlValue> items),
-    Table(TomlTable table)
+    Table(TomlTable table);
+
+    String typeName() {
+        return switch (this) {
+            case Text(String text) -> "a string";
+            case Integer(long number) -> "an integer";
+            case Float(double number) -> "a floating-point number";
+            case Bool(boolean flag) -> "a boolean";
+            case Array(List<TomlValue> items) -> "an array";
+            case Table(TomlTable table) -> "a table";
+        };
+    }
+
+    String toToml() {
+        return switch (this) {
+            case Text(String text) -> TomlWriter.string(text);
+            case Integer(long number) -> "$number";
+            case Float(double number) -> TomlValue.decimal(number);
+            case Bool(boolean flag) -> "$flag";
+            case Array(List<TomlValue> items) -> {
+                StringBuilder text = new StringBuilder();
+                text.append("[");
+                for (int i = 0; i < items.size(); i++) {
+                    if (i > 0) {
+                        text.append(", ");
+                    }
+                    text.append(items.get(i).toToml());
+                }
+                text.append("]");
+                yield text.toString();
+            }
+            case Table(TomlTable table) -> table.toInlineToml();
+        };
+    }
+
+    boolean isSection() {
+        return switch (this) {
+            case Table(TomlTable table) -> !table.isInline();
+            case Array(List<TomlValue> items) -> TomlValue.allStandardTables(&items);
+            default -> false;
+        };
+    }
+
+    static boolean allStandardTables(&List<TomlValue> items) {
+        if (items.isEmpty()) {
+            return false;
+        }
+        for (&TomlValue item : items) {
+            if (!item.isStandardTable()) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    boolean isStandardTable() {
+        return switch (this) {
+            case Table(TomlTable table) -> !table.isInline();
+            default -> false;
+        };
+    }
+
+    mut void rebase(String path) {
+        switch (this) {
+            case Table(TomlTable table) -> table.rebase(path);
+            case Array(List<TomlValue> items) -> {
+                for (int i = 0; i < items.size(); i++) {
+                    items.getMut(i).rebase(path);
+                }
+            }
+            default -> {}
+        }
+    }
+
+    private static String decimal(double number) {
+        if (number.isNaN()) {
+            return "nan";
+        }
+        if (number.isInfinite()) {
+            return number > 0.0 ? "inf" : "-inf";
+        }
+        String text = "$number";
+        return text.contains(".") || text.contains("e") ? text : text + ".0";
+    }
 }

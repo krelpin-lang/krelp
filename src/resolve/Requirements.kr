@@ -1,0 +1,117 @@
+package krelp.resolve;
+
+import krelp.manifest.Manifest;
+import krelp.semver.Version;
+import krelp.source.IndexEntry;
+import krelp.source.SourceId;
+import krelp.util.KrelpException;
+import std.util.ArrayList;
+import std.util.List;
+
+record Requirements(String name, SourceId source, List<Demand> demands) {
+    static Requirements of(&String name, &List<Demand> demands, &List<Demand> hints) throws KrelpException {
+        List<Demand> mine = new ArrayList<>();
+        for (&Demand demand : demands) {
+            if (demand.name() == name) {
+                mine.add(demand.copy());
+            }
+        }
+        SourceId source = mine.get(0).source();
+        for (&Demand demand : &mine) {
+            if (!demand.source().sameAs(&source)) {
+                throw mine.get(0).conflictWith(demand);
+            }
+        }
+        for (&Demand hint : hints) {
+            if (hint.name() != name || !hint.source().sameAs(&source)) {
+                continue;
+            }
+            boolean known = false;
+            for (&Demand demand : &mine) {
+                known = known || demand.from() == hint.from();
+            }
+            if (!known) {
+                mine.add(hint.copy());
+            }
+        }
+        return new Requirements(name, source, mine);
+    }
+
+    String requester() {
+        return this.demands.get(0).from();
+    }
+
+    boolean matches(&Version version) {
+        for (&Demand demand : this.demands) {
+            if (!demand.req().matches(version)) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    void checkLocal(&Manifest manifest, &String dir) throws KrelpException {
+        if (manifest.name() != this.name) {
+            throw new KrelpException(
+                "`${this.requester()}` depends on `${this.name}`, but `$dir` holds the package `${manifest.name()}`"
+            );
+        }
+        if (manifest.isProgram()) {
+            throw new KrelpException(
+                "`${this.requester()}` depends on `${this.name}`, which is a program, not a library",
+                "a library has no `src/Main.kr`"
+            );
+        }
+        for (&Demand demand : this.demands) {
+            if (!demand.req().matches(&manifest.version())) {
+                throw new KrelpException(
+                    "`${demand.from()}` needs `${this.name}` ${demand.req()}, but `$dir` holds version ${manifest.version()}"
+                );
+            }
+        }
+    }
+
+    int pick(&List<IndexEntry> entries, Version? preferred) {
+        int best = -1;
+        for (int i = 0; i < entries.size(); i++) {
+            &IndexEntry entry = entries.get(i);
+            boolean isPreferred = preferred != null && entry.version() == preferred;
+            if ((entry.yanked() && !isPreferred) || !this.matches(&entry.version())) {
+                continue;
+            }
+            if (isPreferred) {
+                return i;
+            }
+            if (best < 0 || entry.version().compareTo(&entries.get(best).version()) > 0) {
+                best = i;
+            }
+        }
+        return best;
+    }
+
+    KrelpException unmet(&List<IndexEntry> entries) {
+        if (entries.isEmpty()) {
+            return new KrelpException(
+                "`${this.requester()}` depends on `${this.name}`, which is not in the registry",
+                "check the name, or use a `path` or `git` dependency"
+            );
+        }
+        StringBuilder needs = new StringBuilder();
+        for (&Demand demand : this.demands) {
+            needs.append("\n    `${demand.from()}` needs ${this.name} ${demand.req()}");
+        }
+        StringBuilder published = new StringBuilder();
+        for (&IndexEntry entry : entries) {
+            if (!entry.yanked()) {
+                if (!published.isEmpty()) {
+                    published.append(", ");
+                }
+                published.append(entry.version().toString());
+            }
+        }
+        return new KrelpException(
+            "no version of `${this.name}` meets every requirement:$needs",
+            "the registry has ${published.isEmpty() ? "no versions that are not yanked" : published.toString()}"
+        );
+    }
+}

@@ -3,7 +3,6 @@ package tests;
 import krelp.toml.TomlException;
 import krelp.toml.TomlParser;
 import krelp.toml.TomlTable;
-import krelp.toml.TomlWriter;
 import std.util.List;
 
 class TomlTest {
@@ -64,7 +63,7 @@ class TomlTest {
             "[[package]]\nname = \"a\"\n\n[[package]]\nname = \"b\"\n[package.extra]\nx = 1\n"
         );
         Check.that(root.array("package")?.size() == 2, "two packages");
-        Check.equal(TomlWriter.write(&root),
+        Check.equal(root.toToml(),
             "[[package]]\nname = \"a\"\n\n[[package]]\nname = \"b\"\n\n[package.extra]\nx = 1\n");
     }
 

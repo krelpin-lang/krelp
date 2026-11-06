@@ -198,20 +198,189 @@ final class TomlTable {
         this.inline = true;
     }
 
-    static String typeName(&TomlValue value) {
-        return switch (value) {
-            case Text(String text) -> "a string";
-            case Integer(long number) -> "an integer";
-            case Float(double number) -> "a floating-point number";
-            case Bool(boolean flag) -> "a boolean";
-            case Array(List<TomlValue> items) -> "an array";
-            case Table(TomlTable table) -> "a table";
+    String toToml() {
+        StringBuilder out = new StringBuilder();
+        this.writeSection(&mut out, "");
+        return out.toString();
+    }
+
+    String toInlineToml() {
+        if (this.order.isEmpty()) {
+            return "{}";
+        }
+        StringBuilder text = new StringBuilder();
+        text.append("{ ");
+        boolean first = true;
+        for (&String key : this.order) {
+            (&TomlValue)? value = this.values.get(key);
+            if (value == null) {
+                continue;
+            }
+            if (!first) {
+                text.append(", ");
+            }
+            first = false;
+            text.append("${TomlWriter.key(key)} = ${value.toToml()}");
+        }
+        text.append(" }");
+        return text.toString();
+    }
+
+    mut String? defineTable(&List<String> path) {
+        (&mut TomlTable)? table = this.walk(path, path.size(), true);
+        if (table == null) {
+            return "`[#]` cannot be defined here, because a key in its path is not a table";
+        }
+        if (table.isDefined()) {
+            return "the table `[#]` is defined twice";
+        }
+        if (table.isInline()) {
+            return "the table `[#]` was written inline and cannot be extended";
+        }
+        table.markDefined();
+        return null;
+    }
+
+    mut String? appendTable(&List<String> path) {
+        (&mut TomlTable)? parent = this.walk(path, path.size() - 1, true);
+        if (parent == null) {
+            return "`[[#]]` cannot be defined here, because a key in its path is not a table";
+        }
+        String last = path.get(path.size() - 1);
+        String qualified = parent.qualify(last);
+        (&mut TomlValue)? existing = parent.getMut(&last);
+        if (existing == null) {
+            List<TomlValue> items = new ArrayList<>();
+            items.add(TomlValue.Table(new TomlTable("$qualified[0]")));
+            parent.put(last, TomlValue.Array(items));
+            return null;
+        }
+        return switch (existing) {
+            case Array(List<TomlValue> items) -> {
+                if (!items.isEmpty() && !TomlValue.allStandardTables(&items)) {
+                    yield "`[[#]]` conflicts with the array `$qualified`, which was written inline";
+                }
+                items.add(TomlValue.Table(new TomlTable("$qualified[${items.size()}]")));
+                yield null;
+            }
+            default -> "`[[#]]` conflicts with the key `$qualified`, which is not an array";
         };
+    }
+
+    mut String? insert(&List<String> current, &List<String> key, TomlValue value) {
+        (&mut TomlTable)? table = this.walk(current, current.size(), false);
+        if (table == null) {
+            return "the current table cannot hold keys";
+        }
+        (&mut TomlTable)? target = table.walk(key, key.size() - 1, true);
+        if (target == null) {
+            return "the key `${TomlWriter.path(key)}` goes through a value that is not a table";
+        }
+        String last = key.get(key.size() - 1);
+        if (target.contains(&last)) {
+            return "the key `${target.qualify(last)}` is defined twice";
+        }
+        if (target.isInline()) {
+            return "an inline table cannot be extended";
+        }
+        value.rebase(target.qualify(last));
+        target.put(last, value);
+        return null;
+    }
+
+    mut void rebase(String path) {
+        this.path = path;
+        List<String> keys = new ArrayList<>();
+        for (&String key : &this.order) {
+            keys.add(key);
+        }
+        for (&String key : &keys) {
+            String child = this.qualify(key);
+            (&mut TomlValue)? inner = this.values.getMut(key);
+            if (inner != null) {
+                inner.rebase(child);
+            }
+        }
+    }
+
+    private mut (&mut TomlTable)? walk(&List<String> path, int count, boolean create) borrows this {
+        if (count == 0) {
+            return this;
+        }
+        String step = path.get(0);
+        if (!this.contains(&step)) {
+            if (!create) {
+                return null;
+            }
+            this.put(step, TomlValue.Table(new TomlTable(this.qualify(step))));
+        }
+        List<String> rest = new ArrayList<>();
+        for (int i = 1; i < path.size(); i++) {
+            rest.add(path.get(i));
+        }
+        (&mut TomlValue)? value = this.values.getMut(&step);
+        if (value == null) {
+            return null;
+        }
+        return switch (value) {
+            case Table(TomlTable inner) -> inner.walk(&rest, count - 1, create);
+            case Array(List<TomlValue> items) -> {
+                if (items.isEmpty()) {
+                    yield null;
+                }
+                (&mut TomlValue) last = items.getMut(items.size() - 1);
+                yield switch (last) {
+                    case Table(TomlTable inner) -> inner.isInline() ? null : inner.walk(&rest, count - 1, create);
+                    default -> null;
+                };
+            }
+            default -> null;
+        };
+    }
+
+    private void writeSection(&mut StringBuilder out, String prefix) {
+        for (&String key : &this.order) {
+            (&TomlValue)? value = this.values.get(key);
+            if (value != null && !value.isSection()) {
+                out.append("${TomlWriter.key(key)} = ${value.toToml()}\n");
+            }
+        }
+        for (&String key : &this.order) {
+            (&TomlValue)? value = this.values.get(key);
+            if (value == null || !value.isSection()) {
+                continue;
+            }
+            String name = prefix.isEmpty() ? TomlWriter.key(key) : "$prefix.${TomlWriter.key(key)}";
+            switch (value) {
+                case Table(TomlTable inner) -> {
+                    if (out.length() > 0) {
+                        out.append("\n");
+                    }
+                    out.append("[$name]\n");
+                    inner.writeSection(out, name);
+                }
+                case Array(List<TomlValue> items) -> {
+                    for (&TomlValue item : items) {
+                        switch (item) {
+                            case Table(TomlTable element) -> {
+                                if (out.length() > 0) {
+                                    out.append("\n");
+                                }
+                                out.append("[[$name]]\n");
+                                element.writeSection(out, name);
+                            }
+                            default -> {}
+                        }
+                    }
+                }
+                default -> {}
+            }
+        }
     }
 
     private TomlException wrongType(String key, String expected, &TomlValue value) {
         return new TomlException(
-            "`${this.qualify(key)}` must be $expected, not ${TomlTable.typeName(value)}"
+            "`${this.qualify(key)}` must be $expected, not ${value.typeName()}"
         );
     }
 }

@@ -27,7 +27,11 @@ final class Args {
         boolean found = false;
         int i = 0;
         while (i < this.items.size()) {
-            if (Args.isOneOf(this.items.get(i), &names)) {
+            boolean matches = false;
+            for (int n = 0; n < names.length; n++) {
+                matches = matches || names[n] == this.items.get(i);
+            }
+            if (matches) {
                 this.items.remove(i);
                 found = true;
             } else {
@@ -89,14 +93,5 @@ final class Args {
                 "run `krelp help $command` to see what it takes"
             );
         }
-    }
-
-    private static boolean isOneOf(&String item, &String[] names) {
-        for (int i = 0; i < names.length; i++) {
-            if (names[i] == item) {
-                return true;
-            }
-        }
-        return false;
     }
 }

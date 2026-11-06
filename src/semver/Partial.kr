@@ -1,20 +1,9 @@
 package krelp.semver;
 
-final class Partial {
-    private int major;
-    private int minor;
-    private int patch;
-    private String pre;
-    private boolean wildcard;
+import std.util.ArrayList;
+import std.util.List;
 
-    private Partial(int major, int minor, int patch, String pre, boolean wildcard) {
-        this.major = major;
-        this.minor = minor;
-        this.patch = patch;
-        this.pre = pre;
-        this.wildcard = wildcard;
-    }
-
+record Partial(int major, int minor, int patch, String pre, boolean wildcard) {
     static Partial parse(String part, String text) throws SemverException {
         String core = part;
         int plus = core.indexOf("+");
@@ -52,12 +41,42 @@ final class Partial {
         return new Partial(numbers[0], numbers[1], numbers[2], pre, wildcard);
     }
 
-    boolean complete() {
-        return this.patch >= 0;
+    List<Bound> bounds(String op, String text) throws SemverException {
+        if (this.wildcard && op != "^") {
+            throw new SemverException("`$text` combines `$op` with a wildcard");
+        }
+        List<Bound> bounds = new ArrayList<>();
+        if (op == "^") {
+            bounds.add(new Bound(Op.GREATER_EQ, this.lower()));
+            bounds.add(new Bound(Op.LESS, this.wildcard ? this.bumpLast() : this.caretUpper()));
+        } else if (op == "~") {
+            bounds.add(new Bound(Op.GREATER_EQ, this.lower()));
+            bounds.add(new Bound(Op.LESS, this.tildeUpper()));
+        } else if (op == "=") {
+            if (this.complete()) {
+                bounds.add(new Bound(Op.EXACT, this.lower()));
+            } else {
+                bounds.add(new Bound(Op.GREATER_EQ, this.lower()));
+                bounds.add(new Bound(Op.LESS, this.bumpLast()));
+            }
+        } else if (op == ">=") {
+            bounds.add(new Bound(Op.GREATER_EQ, this.lower()));
+        } else if (op == ">") {
+            bounds.add(this.complete()
+                ? new Bound(Op.GREATER, this.lower())
+                : new Bound(Op.GREATER_EQ, this.bumpLast()));
+        } else if (op == "<") {
+            bounds.add(new Bound(Op.LESS, this.lower()));
+        } else {
+            bounds.add(this.complete()
+                ? new Bound(Op.LESS_EQ, this.lower())
+                : new Bound(Op.LESS, this.bumpLast()));
+        }
+        return bounds;
     }
 
-    boolean wildcard() {
-        return this.wildcard;
+    boolean complete() {
+        return this.patch >= 0;
     }
 
     Version lower() {

@@ -2,5 +2,18 @@ package krelp.resolve;
 
 import krelp.semver.VersionReq;
 import krelp.source.SourceId;
+import krelp.util.KrelpException;
 
-record Demand(String from, String name, SourceId source, VersionReq req) {}
+record Demand(String from, String name, SourceId source, VersionReq req) {
+    Demand copy() {
+        return new Demand(this.from, this.name, this.source, this.req.copy());
+    }
+
+    KrelpException conflictWith(&Demand other) {
+        return new KrelpException(
+            "`${this.from}` needs `${this.name}` from ${this.source.origin()}, "
+            + "but `${other.from()}` needs it from ${other.source().origin()}",
+            "a build holds only one package of each name; make both use the same source"
+        );
+    }
+}

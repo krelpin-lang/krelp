@@ -1,0 +1,96 @@
+package krelp.source;
+
+import krelp.manifest.GitRef;
+import krelp.util.Fs;
+import krelp.util.KrelpException;
+import krelp.util.Shell;
+import std.io.Files;
+import std.io.IOException;
+import std.io.Path;
+import std.util.ArrayList;
+import std.util.List;
+
+final class GitCache {
+    private static String MARKER = ".krelp-ok";
+
+    private Home home;
+    private Shell shell;
+    private List<String> fetched;
+
+    GitCache(Home home, Shell shell) {
+        this.home = home;
+        this.shell = shell;
+        this.fetched = new ArrayList<>();
+    }
+
+    mut String resolve(String url, &GitRef ref, boolean refresh) throws KrelpException {
+        Repository db = this.mirror(url, refresh);
+        String revision = "${ref.revision()}^{commit}";
+        String? commit = db.tryRun("rev-parse", "--verify", "--quiet", revision);
+        if (commit == null && !this.fetched.contains(&url)) {
+            this.fetch(url, db);
+            commit = db.tryRun("rev-parse", "--verify", "--quiet", revision);
+        }
+        if (commit == null) {
+            throw new KrelpException("`$url` has no $ref");
+        }
+        return commit.trim();
+    }
+
+    mut String checkout(String url, String commit) throws KrelpException {
+        String dir = this.home.checkout(url, commit);
+        String done = Path.join(dir, GitCache.MARKER);
+        if (Files.isFile(done)) {
+            return dir;
+        }
+        Repository db = this.mirror(url, false);
+        if (!db.hasCommit(commit)) {
+            this.fetch(url, db);
+            if (!db.hasCommit(commit)) {
+                throw new KrelpException("`$url` has no commit `$commit`");
+            }
+        }
+        try {
+            Fs.removeAll(dir);
+        } catch (IOException e) {
+            throw new KrelpException(e.getMessage() ?: "couldn't clear `$dir`");
+        }
+        Repository.clone(db.dir(), dir, "--quiet", "--no-checkout").run("checkout", "--quiet", "--detach", commit);
+        try {
+            Files.writeString(done, "");
+        } catch (IOException e) {
+            throw new KrelpException(e.getMessage() ?: "couldn't write `$done`");
+        }
+        return dir;
+    }
+
+    boolean isCheckedOut(String url, String commit) {
+        return Files.isFile(Path.join(this.home.checkout(url, commit), GitCache.MARKER));
+    }
+
+    private mut Repository mirror(String url, boolean refresh) throws KrelpException {
+        String dir = this.home.gitDb(url);
+        if (!Files.isDirectory(dir)) {
+            this.shell.status("Fetching", url);
+            try {
+                Files.createDirectories(Path.parent(dir));
+            } catch (IOException e) {
+                throw new KrelpException(e.getMessage() ?: "couldn't create `$dir`");
+            }
+            Repository db = Repository.clone(url, dir, "--quiet", "--mirror");
+            this.fetched.add(url);
+            return db;
+        }
+        Repository db = new Repository(dir);
+        if (refresh && !this.fetched.contains(&url)) {
+            this.fetch(url, db);
+        }
+        return db;
+    }
+
+    private mut void fetch(String url, Repository db) throws KrelpException {
+        this.shell.status("Updating", url);
+        db.run("fetch", "--quiet", "--prune", "--tags", "origin", "+refs/heads/*:refs/heads/*");
+        this.fetched.add(url);
+    }
+}

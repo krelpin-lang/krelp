@@ -3,65 +3,48 @@ package krelp.resolve;
 import krelp.manifest.Dependency;
 import krelp.semver.Version;
 import krelp.source.SourceId;
+import krelp.util.KrelpException;
+import std.util.ArrayList;
 import std.util.List;
 
-final class Node {
-    private String name;
-    private Version version;
-    private SourceId source;
-    private String? commit;
-    private String? repository;
-    private String dir;
-    private List<Dependency> dependencies;
-
-    Node(
-        String name,
-        Version version,
-        SourceId source,
-        String? commit,
-        String? repository,
-        String dir,
-        List<Dependency> dependencies
-    ) {
-        this.name = name;
-        this.version = version;
-        this.source = source;
-        this.commit = commit;
-        this.repository = repository;
-        this.dir = dir;
-        this.dependencies = dependencies;
+record Node(
+    String name,
+    Version version,
+    SourceId source,
+    String? commit,
+    String? repository,
+    String dir,
+    List<Dependency> dependencies
+) {
+    boolean satisfies(&Demand demand) throws KrelpException {
+        if (!this.source.sameAs(&demand.source())) {
+            throw new KrelpException(
+                "`${demand.from()}` needs `${this.name}` from ${demand.source().origin()}, "
+                + "but another package needs it from ${this.source.origin()}",
+                "a build holds only one package of each name; make both use the same source"
+            );
+        }
+        return demand.req().matches(&this.version);
     }
 
-    String name() {
-        return this.name;
+    boolean isFetched() {
+        return !this.dir.isEmpty();
     }
 
-    Version version() {
-        return this.version;
+    Node copy() {
+        List<Dependency> deps = new ArrayList<>();
+        for (&Dependency dep : this.dependencies) {
+            deps.add(dep.copy());
+        }
+        return new Node(this.name, this.version, this.source, this.commit, this.repository, this.dir, deps);
     }
 
-    SourceId source() {
-        return this.source;
-    }
-
-    String? commit() {
-        return this.commit;
-    }
-
-    String? repository() {
-        return this.repository;
-    }
-
-    String dir() {
-        return this.dir;
-    }
-
-    mut void setDir(String dir) {
-        this.dir = dir;
-    }
-
-    &List<Dependency> dependencies() {
-        return &this.dependencies;
+    List<String> dependencyNames() {
+        List<String> names = new ArrayList<>();
+        for (&Dependency dep : this.dependencies) {
+            names.add(dep.name());
+        }
+        return names;
     }
 
     String toString() {

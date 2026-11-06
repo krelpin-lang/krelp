@@ -7,12 +7,13 @@ import krelp.manifest.Manifest;
 import krelp.manifest.ManifestEditor;
 import krelp.util.Fs;
 import krelp.util.KrelpException;
+import krelp.util.Shell;
 import std.util.List;
 
 class ManifestTest {
     static Manifest parse(String text) {
         try {
-            return Manifest.parse(text, "/p", "krelp.toml");
+            return Manifest.parse(text, "/p", "krelp.toml", new Shell(false));
         } catch (KrelpException e) {
             throw new IllegalStateException(e.getMessage() ?: "");
         }
@@ -20,7 +21,7 @@ class ManifestTest {
 
     static String error(String text) {
         try {
-            Manifest.parse(text, "/p", "krelp.toml");
+            Manifest.parse(text, "/p", "krelp.toml", new Shell(false));
             return "no error";
         } catch (KrelpException e) {
             return e.getMessage() ?: "";

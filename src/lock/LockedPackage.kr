@@ -1,41 +1,52 @@
 package krelp.lock;
 
+import krelp.semver.SemverException;
 import krelp.semver.Version;
 import krelp.source.SourceId;
+import krelp.toml.TomlException;
+import krelp.toml.TomlTable;
+import krelp.toml.TomlWriter;
+import krelp.util.KrelpException;
 import std.util.List;
 
-final class LockedPackage {
-    private String name;
-    private Version version;
-    private SourceId source;
-    private String? commit;
-    private List<String> dependencies;
-
-    LockedPackage(String name, Version version, SourceId source, String? commit, List<String> dependencies) {
-        this.name = name;
-        this.version = version;
-        this.source = source;
-        this.commit = commit;
-        this.dependencies = dependencies;
+record LockedPackage(String name, Version version, SourceId source, String? commit, List<String> dependencies) {
+    static LockedPackage fromToml(&TomlTable table, String file) throws TomlException, KrelpException {
+        String name = table.requireString("name");
+        Version version;
+        try {
+            version = Version.parse(table.requireString("version"));
+        } catch (SemverException e) {
+            throw new KrelpException("$file: `$name`: ${e.getMessage() ?: ""}");
+        }
+        return new LockedPackage(
+            name,
+            version,
+            SourceId.parse(table.requireString("source")),
+            table.string("commit"),
+            table.strings("dependencies")
+        );
     }
 
-    String name() {
-        return this.name;
-    }
-
-    &Version version() {
-        return &this.version;
-    }
-
-    &SourceId source() {
-        return &this.source;
-    }
-
-    String? commit() {
-        return this.commit;
-    }
-
-    &List<String> dependencies() {
-        return &this.dependencies;
+    String toToml() {
+        StringBuilder out = new StringBuilder();
+        out.appendLine("[[package]]");
+        out.appendLine("name = ${TomlWriter.string(this.name)}");
+        out.appendLine("version = ${TomlWriter.string(this.version.toString())}");
+        out.appendLine("source = ${TomlWriter.string(this.source.key())}");
+        String? commit = this.commit;
+        if (commit != null) {
+            out.appendLine("commit = ${TomlWriter.string(commit)}");
+        }
+        if (!this.dependencies.isEmpty()) {
+            StringBuilder deps = new StringBuilder();
+            for (&String dep : this.dependencies) {
+                if (!deps.isEmpty()) {
+                    deps.append(", ");
+                }
+                deps.append(TomlWriter.string(dep));
+            }
+            out.appendLine("dependencies = [$deps]");
+        }
+        return out.toString();
     }
 }

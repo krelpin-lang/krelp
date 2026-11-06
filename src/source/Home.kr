@@ -1,33 +1,29 @@
 package krelp.source;
 
-import krelp.util.Hashes;
 import std.io.Path;
 
-final class Home {
-    private Home() {}
-
-    static String dir() {
+record Home(String dir) {
+    static Home fromEnv() {
         String? home = System.env("KRELP_HOME");
         if (home != null && !home.isEmpty()) {
-            return home;
+            return new Home(home);
         }
-        return Path.join(System.env("HOME") ?: "/", ".krelp");
+        return new Home(Path.join(System.env("HOME") ?: "/", ".krelp"));
     }
 
-    static String gitDb(String url) {
-        return Path.join(Path.join(Home.dir(), "git/db"), Home.name(url));
+    String gitDb(String url) {
+        return Path.join(Path.join(this.dir, "git/db"), this.name(url));
     }
 
-    static String checkout(String url, String commit) {
-        String repo = Path.join(Path.join(Home.dir(), "git/checkouts"), Home.name(url));
-        return Path.join(repo, commit);
+    String checkout(String url, String commit) {
+        return Path.join(Path.join(Path.join(this.dir, "git/checkouts"), this.name(url)), commit);
     }
 
-    static String index(String url) {
-        return Path.join(Path.join(Home.dir(), "index"), Home.name(url));
+    String index(String url) {
+        return Path.join(Path.join(this.dir, "index"), this.name(url));
     }
 
-    private static String name(String url) {
+    private String name(String url) {
         String base = Path.fileName(url.endsWith("/") ? url.substring(0, url.length() - 1) : url);
         String? stripped = base.stripSuffix(".git");
         if (stripped != null) {
@@ -43,6 +39,13 @@ final class Home {
                 safe.append('_');
             }
         }
-        return "${safe}-${Hashes.fnv64(url)}";
+        long hash = -3750763034362895579L;
+        for (byte b : url.bytes()) {
+            hash = hash ^ ((long) b & 255L);
+            hash = hash * 1099511628211L;
+        }
+        long high = (hash >>> 32) & 4294967295L;
+        long low = hash & 4294967295L;
+        return "${safe}-${high.format("08x")}${low.format("08x")}";
     }
 }

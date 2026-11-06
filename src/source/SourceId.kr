@@ -71,4 +71,17 @@ enum SourceId {
             case Registry(String index) -> "";
         };
     }
+
+    String origin() {
+        return switch (this) {
+            case Root -> "the package being built";
+            case Path(String dir) -> "`$dir`";
+            case Git(String url, GitRef ref) -> "`$url` ($ref)";
+            case Registry(String index) -> "the registry";
+        };
+    }
+
+    boolean sameAs(&SourceId other) {
+        return this.key() == other.key();
+    }
 }
