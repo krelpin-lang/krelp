@@ -1,0 +1,31 @@
+package krelp.util;
+
+import std.sync.AtomicBool;
+
+final class Shell {
+    private static AtomicBool QUIET = new AtomicBool(false);
+
+    private Shell() {}
+
+    static void setQuiet(boolean quiet) {
+        Shell.QUIET.set(quiet);
+    }
+
+    static void status(String verb, String subject) {
+        if (Shell.QUIET.get()) {
+            return;
+        }
+        Console.eprintln("${verb:>12} $subject");
+    }
+
+    static void warn(String message) {
+        Console.eprintln("warning: $message");
+    }
+
+    static void error(String message, String? help) {
+        Console.eprintln("error: $message");
+        if (help != null) {
+            Console.eprintln("  help: $help");
+        }
+    }
+}

@@ -1,0 +1,48 @@
+package krelp.util;
+
+import std.io.Files;
+import std.io.IOException;
+import std.io.Path;
+
+final class Fs {
+    private Fs() {}
+
+    static void removeAll(String path) throws IOException {
+        if (!Files.exists(path)) {
+            return;
+        }
+        if (Files.isDirectory(path) && !Fs.isLink(path)) {
+            for (String name : Files.list(path)) {
+                Fs.removeAll(Path.join(path, name));
+            }
+        }
+        Files.delete(path);
+    }
+
+    static void write(String path, String text) throws IOException {
+        String parent = Path.parent(path);
+        if (!parent.isEmpty()) {
+            Files.createDirectories(parent);
+        }
+        Files.writeString(path, text);
+    }
+
+    static String resolve(String base, String path) {
+        String joined = Path.join(base, path);
+        try {
+            return Files.canonicalPath(joined);
+        } catch (IOException e) {
+            return joined;
+        }
+    }
+
+    private static boolean isLink(String path) {
+        try {
+            String parent = Path.parent(path);
+            String expected = Path.join(Files.canonicalPath(parent.isEmpty() ? "." : parent), Path.fileName(path));
+            return Files.canonicalPath(path) != expected;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+}

@@ -1,0 +1,12 @@
+package krelp.toml;
+
+import std.util.List;
+
+enum TomlValue {
+    Text(String value),
+    Integer(long value),
+    Float(double value),
+    Bool(boolean value),
+    Array(List<TomlValue> items),
+    Table(TomlTable table)
+}

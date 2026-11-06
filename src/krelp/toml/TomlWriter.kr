@@ -1,0 +1,183 @@
+package krelp.toml;
+
+import std.util.List;
+
+final class TomlWriter {
+    private TomlWriter() {}
+
+    static String write(&TomlTable root) {
+        StringBuilder out = new StringBuilder();
+        TomlWriter.section(&mut out, root, "");
+        return out.toString();
+    }
+
+    static String key(String key) {
+        if (key.isEmpty()) {
+            return "\"\"";
+        }
+        for (char c : key.chars()) {
+            boolean bare = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z')
+                || (c >= '0' && c <= '9') || c == '_' || c == '-';
+            if (!bare) {
+                return TomlWriter.string(key);
+            }
+        }
+        return key;
+    }
+
+    static String path(&List<String> parts) {
+        StringBuilder text = new StringBuilder();
+        for (int i = 0; i < parts.size(); i++) {
+            if (i > 0) {
+                text.append(".");
+            }
+            text.append(TomlWriter.key(parts.get(i)));
+        }
+        return text.toString();
+    }
+
+    static String string(String value) {
+        StringBuilder text = new StringBuilder();
+        text.append('"');
+        for (char c : value.chars()) {
+            if (c == '"') {
+                text.append("\\\"");
+            } else if (c == '\\') {
+                text.append("\\\\");
+            } else if (c == '\n') {
+                text.append("\\n");
+            } else if (c == '\t') {
+                text.append("\\t");
+            } else if (c == '\r') {
+                text.append("\\r");
+            } else if (c < ' ' || c == '\u{7F}') {
+                text.append("\\u" + ((int) c).format("04X"));
+            } else {
+                text.append(c);
+            }
+        }
+        text.append('"');
+        return text.toString();
+    }
+
+    static String value(&TomlValue value) {
+        return switch (value) {
+            case Text(String text) -> TomlWriter.string(text);
+            case Integer(long number) -> "$number";
+            case Float(double number) -> TomlWriter.decimal(number);
+            case Bool(boolean flag) -> "$flag";
+            case Array(List<TomlValue> items) -> TomlWriter.inlineArray(&items);
+            case Table(TomlTable table) -> TomlWriter.inlineTable(&table);
+        };
+    }
+
+    private static String decimal(double number) {
+        if (number.isNaN()) {
+            return "nan";
+        }
+        if (number.isInfinite()) {
+            return number > 0.0 ? "inf" : "-inf";
+        }
+        String text = "$number";
+        return text.contains(".") || text.contains("e") ? text : text + ".0";
+    }
+
+    private static String inlineArray(&List<TomlValue> items) {
+        StringBuilder text = new StringBuilder();
+        text.append("[");
+        for (int i = 0; i < items.size(); i++) {
+            if (i > 0) {
+                text.append(", ");
+            }
+            text.append(TomlWriter.value(items.get(i)));
+        }
+        text.append("]");
+        return text.toString();
+    }
+
+    private static String inlineTable(&TomlTable table) {
+        if (table.size() == 0) {
+            return "{}";
+        }
+        StringBuilder text = new StringBuilder();
+        text.append("{ ");
+        boolean first = true;
+        for (&String key : table.keys()) {
+            (&TomlValue)? value = table.get(key);
+            if (value == null) {
+                continue;
+            }
+            if (!first) {
+                text.append(", ");
+            }
+            first = false;
+            text.append(TomlWriter.key(key) + " = " + TomlWriter.value(value));
+        }
+        text.append(" }");
+        return text.toString();
+    }
+
+    private static void section(&mut StringBuilder out, &TomlTable table, String prefix) {
+        for (&String key : table.keys()) {
+            (&TomlValue)? value = table.get(key);
+            if (value != null && !TomlWriter.isSection(value)) {
+                out.append(TomlWriter.key(key) + " = " + TomlWriter.value(value) + "\n");
+            }
+        }
+        for (&String key : table.keys()) {
+            (&TomlValue)? value = table.get(key);
+            if (value == null || !TomlWriter.isSection(value)) {
+                continue;
+            }
+            String name = prefix.isEmpty() ? TomlWriter.key(key) : prefix + "." + TomlWriter.key(key);
+            switch (value) {
+                case Table(TomlTable inner) -> {
+                    if (out.length() > 0) {
+                        out.append("\n");
+                    }
+                    out.append("[$name]\n");
+                    TomlWriter.section(out, &inner, name);
+                }
+                case Array(List<TomlValue> items) -> {
+                    for (&TomlValue item : items) {
+                        switch (item) {
+                            case Table(TomlTable element) -> {
+                                if (out.length() > 0) {
+                                    out.append("\n");
+                                }
+                                out.append("[[$name]]\n");
+                                TomlWriter.section(out, &element, name);
+                            }
+                            default -> {}
+                        }
+                    }
+                }
+                default -> {}
+            }
+        }
+    }
+
+    private static boolean isSection(&TomlValue value) {
+        return switch (value) {
+            case Table(TomlTable table) -> !table.isInline();
+            case Array(List<TomlValue> items) -> TomlWriter.allTables(&items);
+            default -> false;
+        };
+    }
+
+    private static boolean allTables(&List<TomlValue> items) {
+        if (items.isEmpty()) {
+            return false;
+        }
+        for (&TomlValue item : items) {
+            boolean table = switch (item) {
+                case Table(TomlTable inner) -> !inner.isInline();
+                default -> false;
+            };
+            if (!table) {
+                return false;
+            }
+        }
+        return true;
+    }
+}

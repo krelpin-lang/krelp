@@ -1,0 +1,7 @@
+package krelp.toml;
+
+class TomlException extends Exception {
+    TomlException(String message) {
+        super(message);
+    }
+}

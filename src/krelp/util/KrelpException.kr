@@ -1,0 +1,19 @@
+package krelp.util;
+
+class KrelpException extends Exception {
+    private String? help;
+
+    KrelpException(String message) {
+        super(message);
+        this.help = null;
+    }
+
+    KrelpException(String message, String help) {
+        super(message);
+        this.help = help;
+    }
+
+    String? help() {
+        return this.help;
+    }
+}

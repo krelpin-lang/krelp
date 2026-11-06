@@ -1,0 +1,213 @@
+package krelp.toml;
+
+import std.util.ArrayList;
+import std.util.HashMap;
+import std.util.List;
+import std.util.Map;
+
+final class TomlTable {
+    private String path;
+    private List<String> order;
+    private Map<String, TomlValue> values;
+    private boolean defined;
+    private boolean inline;
+
+    TomlTable() {
+        this.path = "";
+        this.order = new ArrayList<>();
+        this.values = new HashMap<>();
+        this.defined = false;
+        this.inline = false;
+    }
+
+    TomlTable(String path) {
+        this.path = path;
+        this.order = new ArrayList<>();
+        this.values = new HashMap<>();
+        this.defined = false;
+        this.inline = false;
+    }
+
+    String path() {
+        return this.path;
+    }
+
+    String qualify(String key) {
+        String shown = TomlWriter.key(key);
+        return this.path.isEmpty() ? shown : "${this.path}.$shown";
+    }
+
+    &List<String> keys() {
+        return &this.order;
+    }
+
+    int size() {
+        return this.order.size();
+    }
+
+    boolean contains(&String key) {
+        return this.values.containsKey(key);
+    }
+
+    (&TomlValue)? get(&String key) {
+        return this.values.get(key);
+    }
+
+    mut (&mut TomlValue)? getMut(&String key) {
+        return this.values.getMut(key);
+    }
+
+    mut void put(String key, TomlValue value) {
+        if (!this.values.containsKey(&key)) {
+            this.order.add(key);
+        }
+        this.values.put(key, value);
+    }
+
+    mut TomlValue? remove(&String key) {
+        int index = this.order.indexOf(key);
+        if (index >= 0) {
+            this.order.remove(index);
+        }
+        return this.values.remove(key);
+    }
+
+    String? string(String key) throws TomlException {
+        (&TomlValue)? value = this.values.get(&key);
+        if (value == null) {
+            return null;
+        }
+        return switch (value) {
+            case Text(String text) -> text;
+            default -> throw this.wrongType(key, "a string", value);
+        };
+    }
+
+    String requireString(String key) throws TomlException {
+        String? value = this.string(key);
+        if (value == null) {
+            throw new TomlException("`${this.qualify(key)}` is missing");
+        }
+        return value;
+    }
+
+    boolean bool(String key, boolean fallback) throws TomlException {
+        (&TomlValue)? value = this.values.get(&key);
+        if (value == null) {
+            return fallback;
+        }
+        return switch (value) {
+            case Bool(boolean flag) -> flag;
+            default -> throw this.wrongType(key, "a boolean", value);
+        };
+    }
+
+    long integer(String key, long fallback) throws TomlException {
+        (&TomlValue)? value = this.values.get(&key);
+        if (value == null) {
+            return fallback;
+        }
+        return switch (value) {
+            case Integer(long number) -> number;
+            default -> throw this.wrongType(key, "an integer", value);
+        };
+    }
+
+    (&TomlTable)? table(String key) throws TomlException {
+        (&TomlValue)? value = this.values.get(&key);
+        if (value == null) {
+            return null;
+        }
+        return switch (value) {
+            case Table(TomlTable table) -> &table;
+            default -> throw this.wrongType(key, "a table", value);
+        };
+    }
+
+    &TomlTable requireTable(String key) throws TomlException {
+        (&TomlTable)? table = this.table(key);
+        if (table == null) {
+            throw new TomlException("the table `[${this.qualify(key)}]` is missing");
+        }
+        return table;
+    }
+
+    (&List<TomlValue>)? array(String key) throws TomlException {
+        (&TomlValue)? value = this.values.get(&key);
+        if (value == null) {
+            return null;
+        }
+        return switch (value) {
+            case Array(List<TomlValue> items) -> &items;
+            default -> throw this.wrongType(key, "an array", value);
+        };
+    }
+
+    List<String> strings(String key) throws TomlException {
+        List<String> result = new ArrayList<>();
+        (&List<TomlValue>)? items = this.array(key);
+        if (items == null) {
+            return result;
+        }
+        for (&TomlValue item : items) {
+            String? text = switch (item) {
+                case Text(String value) -> value;
+                default -> null;
+            };
+            if (text == null) {
+                throw new TomlException("`${this.qualify(key)}` must be an array of strings");
+            }
+            result.add(text);
+        }
+        return result;
+    }
+
+    List<String> unknownKeys(String... known) {
+        List<String> unknown = new ArrayList<>();
+        for (&String key : this.order) {
+            boolean found = false;
+            for (int i = 0; i < known.length; i++) {
+                if (known[i] == key) {
+                    found = true;
+                }
+            }
+            if (!found) {
+                unknown.add(this.qualify(key));
+            }
+        }
+        return unknown;
+    }
+
+    boolean isDefined() {
+        return this.defined;
+    }
+
+    mut void markDefined() {
+        this.defined = true;
+    }
+
+    boolean isInline() {
+        return this.inline;
+    }
+
+    mut void markInline() {
+        this.inline = true;
+    }
+
+    static String typeName(&TomlValue value) {
+        return switch (value) {
+            case Text(String text) -> "a string";
+            case Integer(long number) -> "an integer";
+            case Float(double number) -> "a floating-point number";
+            case Bool(boolean flag) -> "a boolean";
+            case Array(List<TomlValue> items) -> "an array";
+            case Table(TomlTable table) -> "a table";
+        };
+    }
+
+    private TomlException wrongType(String key, String expected, &TomlValue value) {
+        return new TomlException(
+            "`${this.qualify(key)}` must be $expected, not ${TomlTable.typeName(value)}"
+        );
+    }
+}

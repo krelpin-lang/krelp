@@ -1,0 +1,717 @@
+package krelp.toml;
+
+import std.util.ArrayList;
+import std.util.List;
+
+final class TomlParser {
+    private String file;
+    private char[] chars;
+    private int pos;
+    private int line;
+    private int column;
+    private TomlTable root;
+    private List<String> current;
+
+    private TomlParser(String text, String file) {
+        this.file = file;
+        this.chars = text.chars();
+        this.pos = 0;
+        this.line = 1;
+        this.column = 1;
+        this.root = new TomlTable();
+        this.current = new ArrayList<>();
+    }
+
+    static TomlTable parse(String text, String file) throws TomlException {
+        TomlParser parser = new TomlParser(text, file);
+        parser.document();
+        return parser.root;
+    }
+
+    private mut void document() throws TomlException {
+        while (true) {
+            this.skipBlankLines();
+            if (this.atEnd()) {
+                return;
+            }
+            if (this.peek() == '[') {
+                this.header();
+            } else {
+                this.keyValue();
+            }
+            this.endOfLine();
+        }
+    }
+
+    private mut void header() throws TomlException {
+        int line = this.line;
+        int column = this.column;
+        this.advance();
+        boolean array = this.peek() == '[';
+        if (array) {
+            this.advance();
+        }
+        this.skipSpaces();
+        List<String> path = this.key();
+        this.skipSpaces();
+        this.expect(']', "to close the table header");
+        if (array) {
+            this.expect(']', "to close the array of tables header");
+        }
+        String shown = TomlWriter.path(&path);
+        String? problem = array
+            ? TomlParser.appendTable(&mut this.root, &path)
+            : TomlParser.defineTable(&mut this.root, &path);
+        if (problem != null) {
+            throw this.errorAt(line, column, problem.replace("#", shown));
+        }
+        this.current = path;
+    }
+
+    private mut void keyValue() throws TomlException {
+        int line = this.line;
+        int column = this.column;
+        List<String> key = this.key();
+        this.skipSpaces();
+        this.expect('=', "after the key `${TomlWriter.path(&key)}`");
+        this.skipSpaces();
+        TomlValue value = this.value();
+        String? problem = TomlParser.insert(&mut this.root, &this.current, &key, value);
+        if (problem != null) {
+            throw this.errorAt(line, column, problem);
+        }
+    }
+
+    private mut List<String> key() throws TomlException {
+        List<String> parts = new ArrayList<>();
+        while (true) {
+            this.skipSpaces();
+            char c = this.peek();
+            if (c == '"') {
+                parts.add(this.basicString());
+            } else if (c == '\'') {
+                parts.add(this.literalString());
+            } else if (TomlParser.isBareKeyChar(c)) {
+                StringBuilder bare = new StringBuilder();
+                while (!this.atEnd() && TomlParser.isBareKeyChar(this.peek())) {
+                    bare.append(this.advance());
+                }
+                parts.add(bare.toString());
+            } else {
+                throw this.error("expected a key");
+            }
+            this.skipSpaces();
+            if (this.atEnd() || this.peek() != '.') {
+                return parts;
+            }
+            this.advance();
+        }
+    }
+
+    private mut TomlValue value() throws TomlException {
+        if (this.atEnd()) {
+            throw this.error("expected a value");
+        }
+        char c = this.peek();
+        if (c == '"') {
+            if (this.lookingAt("\"\"\"")) {
+                return TomlValue.Text(this.multilineBasicString());
+            }
+            return TomlValue.Text(this.basicString());
+        }
+        if (c == '\'') {
+            if (this.lookingAt("'''")) {
+                return TomlValue.Text(this.multilineLiteralString());
+            }
+            return TomlValue.Text(this.literalString());
+        }
+        if (c == '[') {
+            return this.array();
+        }
+        if (c == '{') {
+            return this.inlineTable();
+        }
+        if (this.lookingAt("true")) {
+            this.skip(4);
+            return TomlValue.Bool(true);
+        }
+        if (this.lookingAt("false")) {
+            this.skip(5);
+            return TomlValue.Bool(false);
+        }
+        return this.number();
+    }
+
+    private mut TomlValue array() throws TomlException {
+        this.advance();
+        List<TomlValue> items = new ArrayList<>();
+        while (true) {
+            this.skipWhitespaceAndComments();
+            if (this.atEnd()) {
+                throw this.error("the array is never closed with `]`");
+            }
+            if (this.peek() == ']') {
+                this.advance();
+                return TomlValue.Array(items);
+            }
+            items.add(this.value());
+            this.skipWhitespaceAndComments();
+            if (!this.atEnd() && this.peek() == ',') {
+                this.advance();
+            } else if (this.atEnd() || this.peek() != ']') {
+                throw this.error("expected `,` or `]` in the array");
+            }
+        }
+    }
+
+    private mut TomlValue inlineTable() throws TomlException {
+        this.advance();
+        TomlTable table = new TomlTable();
+        List<String> here = new ArrayList<>();
+        this.skipSpaces();
+        if (!this.atEnd() && this.peek() == '}') {
+            this.advance();
+            table.markInline();
+            return TomlValue.Table(table);
+        }
+        while (true) {
+            this.skipSpaces();
+            int line = this.line;
+            int column = this.column;
+            List<String> key = this.key();
+            this.skipSpaces();
+            this.expect('=', "after the key `${TomlWriter.path(&key)}`");
+            this.skipSpaces();
+            TomlValue value = this.value();
+            String? problem = TomlParser.insert(&mut table, &here, &key, value);
+            if (problem != null) {
+                throw this.errorAt(line, column, problem);
+            }
+            this.skipSpaces();
+            if (this.atEnd()) {
+                throw this.error("the inline table is never closed with `}`");
+            }
+            char c = this.advance();
+            if (c == '}') {
+                table.markInline();
+                return TomlValue.Table(table);
+            }
+            if (c != ',') {
+                throw this.error("expected `,` or `}` in the inline table");
+            }
+        }
+    }
+
+    private mut TomlValue number() throws TomlException {
+        int line = this.line;
+        int column = this.column;
+        StringBuilder text = new StringBuilder();
+        while (!this.atEnd()) {
+            char c = this.peek();
+            if (c.isLetterOrDigit() || c == '+' || c == '-' || c == '.' || c == '_') {
+                text.append(this.advance());
+            } else if (c == ':') {
+                throw this.errorAt(line, column, "dates and times are not supported");
+            } else {
+                break;
+            }
+        }
+        String literal = text.toString();
+        if (literal.isEmpty()) {
+            throw this.errorAt(line, column, "expected a value");
+        }
+        TomlValue? parsed = TomlParser.parseNumber(literal);
+        if (parsed == null) {
+            throw this.errorAt(line, column, "`$literal` is not a valid value");
+        }
+        return parsed;
+    }
+
+    private static TomlValue? parseNumber(String literal) {
+        String sign = "";
+        String body = literal;
+        if (literal.startsWith("+") || literal.startsWith("-")) {
+            sign = literal.substring(0, 1);
+            body = literal.substring(1);
+        }
+        if (body == "inf" || body == "nan") {
+            return TomlValue.Float(double.parse(sign + body));
+        }
+        if (!TomlParser.underscoresValid(body)) {
+            return null;
+        }
+        String digits = body.replace("_", "");
+        if (digits.startsWith("0x") || digits.startsWith("0o") || digits.startsWith("0b")) {
+            if (!sign.isEmpty()) {
+                return null;
+            }
+            int radix = digits.startsWith("0x") ? 16 : digits.startsWith("0o") ? 8 : 2;
+            return TomlParser.parseRadix(digits.substring(2), radix);
+        }
+        boolean isFloat = digits.contains(".") || digits.contains("e") || digits.contains("E");
+        if (digits.isEmpty() || !digits.chars()[0].isDigit()) {
+            return null;
+        }
+        if (digits.length() > 1 && digits.startsWith("0") && !digits.startsWith("0.")
+                && !digits.startsWith("0e") && !digits.startsWith("0E")) {
+            return null;
+        }
+        try {
+            if (isFloat) {
+                if (digits.endsWith(".") || digits.contains(".e") || digits.contains(".E")) {
+                    return null;
+                }
+                return TomlValue.Float(double.parse(sign + digits));
+            }
+            for (char c : digits.chars()) {
+                if (!(c >= '0' && c <= '9')) {
+                    return null;
+                }
+            }
+            return TomlValue.Integer(long.parse(sign + digits));
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
+    private static TomlValue? parseRadix(String digits, int radix) {
+        if (digits.isEmpty()) {
+            return null;
+        }
+        long value = 0L;
+        for (char c : digits.chars()) {
+            int digit = -1;
+            if (c >= '0' && c <= '9') {
+                digit = c - '0';
+            } else if (c >= 'a' && c <= 'f') {
+                digit = c - 'a' + 10;
+            } else if (c >= 'A' && c <= 'F') {
+                digit = c - 'A' + 10;
+            }
+            if (digit < 0 || digit >= radix) {
+                return null;
+            }
+            long next = value * radix + digit;
+            if (next < value) {
+                return null;
+            }
+            value = next;
+        }
+        return TomlValue.Integer(value);
+    }
+
+    private static boolean underscoresValid(String text) {
+        char[] chars = text.chars();
+        for (int i = 0; i < chars.length; i++) {
+            if (chars[i] == '_') {
+                if (i == 0 || i == chars.length - 1) {
+                    return false;
+                }
+                if (!chars[i - 1].isLetterOrDigit() || !chars[i + 1].isLetterOrDigit()) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    private mut String basicString() throws TomlException {
+        this.advance();
+        StringBuilder text = new StringBuilder();
+        while (true) {
+            if (this.atEnd() || this.peek() == '\n') {
+                throw this.error("the string is never closed with `\"`");
+            }
+            char c = this.advance();
+            if (c == '"') {
+                return text.toString();
+            }
+            if (c == '\\') {
+                this.escape(&mut text);
+            } else if (c < ' ' && c != '\t') {
+                throw this.error("control characters must be escaped in strings");
+            } else {
+                text.append(c);
+            }
+        }
+    }
+
+    private mut String multilineBasicString() throws TomlException {
+        this.skip(3);
+        this.skipNewline();
+        StringBuilder text = new StringBuilder();
+        while (true) {
+            if (this.atEnd()) {
+                throw this.error("the string is never closed with `\"\"\"`");
+            }
+            if (this.lookingAt("\"\"\"")) {
+                this.skip(3);
+                int extra = 0;
+                while (extra < 2 && !this.atEnd() && this.peek() == '"') {
+                    text.append(this.advance());
+                    extra++;
+                }
+                return text.toString();
+            }
+            char c = this.advance();
+            if (c == '\\') {
+                if (this.lineEndingBackslash()) {
+                    continue;
+                }
+                this.escape(&mut text);
+            } else if (c == '\r' && !this.atEnd() && this.peek() == '\n') {
+                continue;
+            } else {
+                text.append(c);
+            }
+        }
+    }
+
+    private mut boolean lineEndingBackslash() {
+        int at = this.pos;
+        while (at < this.chars.length && (this.chars[at] == ' ' || this.chars[at] == '\t')) {
+            at++;
+        }
+        if (at >= this.chars.length || (this.chars[at] != '\n' && this.chars[at] != '\r')) {
+            return false;
+        }
+        while (!this.atEnd()) {
+            char c = this.peek();
+            if (c != ' ' && c != '\t' && c != '\n' && c != '\r') {
+                break;
+            }
+            this.advance();
+        }
+        return true;
+    }
+
+    private mut String literalString() throws TomlException {
+        this.advance();
+        StringBuilder text = new StringBuilder();
+        while (true) {
+            if (this.atEnd() || this.peek() == '\n') {
+                throw this.error("the string is never closed with `'`");
+            }
+            char c = this.advance();
+            if (c == '\'') {
+                return text.toString();
+            }
+            text.append(c);
+        }
+    }
+
+    private mut String multilineLiteralString() throws TomlException {
+        this.skip(3);
+        this.skipNewline();
+        StringBuilder text = new StringBuilder();
+        while (true) {
+            if (this.atEnd()) {
+                throw this.error("the string is never closed with `'''`");
+            }
+            if (this.lookingAt("'''")) {
+                this.skip(3);
+                int extra = 0;
+                while (extra < 2 && !this.atEnd() && this.peek() == '\'') {
+                    text.append(this.advance());
+                    extra++;
+                }
+                return text.toString();
+            }
+            text.append(this.advance());
+        }
+    }
+
+    private mut void escape(&mut StringBuilder text) throws TomlException {
+        if (this.atEnd()) {
+            throw this.error("the string is never closed");
+        }
+        char c = this.advance();
+        if (c == 'n') {
+            text.append('\n');
+        } else if (c == 't') {
+            text.append('\t');
+        } else if (c == 'r') {
+            text.append('\r');
+        } else if (c == 'b') {
+            text.append('\u{8}');
+        } else if (c == 'f') {
+            text.append('\u{C}');
+        } else if (c == '"') {
+            text.append('"');
+        } else if (c == '\\') {
+            text.append('\\');
+        } else if (c == 'u' || c == 'U') {
+            int count = c == 'u' ? 4 : 8;
+            int code = 0;
+            for (int i = 0; i < count; i++) {
+                if (this.atEnd()) {
+                    throw this.error("the escape needs $count hexadecimal digits");
+                }
+                char digit = this.advance();
+                int value = -1;
+                if (digit >= '0' && digit <= '9') {
+                    value = digit - '0';
+                } else if (digit >= 'a' && digit <= 'f') {
+                    value = digit - 'a' + 10;
+                } else if (digit >= 'A' && digit <= 'F') {
+                    value = digit - 'A' + 10;
+                }
+                if (value < 0) {
+                    throw this.error("the escape needs $count hexadecimal digits");
+                }
+                code = code * 16 + value;
+            }
+            if ((code >= 55296 && code <= 57343) || code > 1114111) {
+                throw this.error("the escape is not a Unicode scalar value");
+            }
+            text.append((char) code);
+        } else {
+            throw this.error("`\\$c` is not a valid escape");
+        }
+    }
+
+    private static String? defineTable(&mut TomlTable root, &List<String> path) {
+        (&mut TomlTable)? table = TomlParser.walk(root, path, path.size(), true);
+        if (table == null) {
+            return "`[#]` cannot be defined here, because a key in its path is not a table";
+        }
+        if (table.isDefined()) {
+            return "the table `[#]` is defined twice";
+        }
+        if (table.isInline()) {
+            return "the table `[#]` was written inline and cannot be extended";
+        }
+        table.markDefined();
+        return null;
+    }
+
+    private static String? appendTable(&mut TomlTable root, &List<String> path) {
+        (&mut TomlTable)? parent = TomlParser.walk(root, path, path.size() - 1, true);
+        if (parent == null) {
+            return "`[[#]]` cannot be defined here, because a key in its path is not a table";
+        }
+        String last = path.get(path.size() - 1);
+        String qualified = parent.qualify(last);
+        (&mut TomlValue)? existing = parent.getMut(&last);
+        if (existing == null) {
+            List<TomlValue> items = new ArrayList<>();
+            items.add(TomlValue.Table(new TomlTable("$qualified[0]")));
+            parent.put(last, TomlValue.Array(items));
+            return null;
+        }
+        return switch (existing) {
+            case Array(List<TomlValue> items) -> TomlParser.appendTo(&mut items, &qualified);
+            default -> "`[[#]]` conflicts with the key `$qualified`, which is not an array";
+        };
+    }
+
+    private static String? appendTo(&mut List<TomlValue> items, &String qualified) {
+        for (&TomlValue item : items) {
+            boolean isTable = switch (item) {
+                case Table(TomlTable table) -> !table.isInline();
+                default -> false;
+            };
+            if (!isTable) {
+                return "`[[#]]` conflicts with the array `$qualified`, which was written inline";
+            }
+        }
+        items.add(TomlValue.Table(new TomlTable("$qualified[${items.size()}]")));
+        return null;
+    }
+
+    private static String? insert(
+        &mut TomlTable root,
+        &List<String> current,
+        &List<String> key,
+        TomlValue value
+    ) {
+        (&mut TomlTable)? table = TomlParser.walk(root, current, current.size(), false);
+        if (table == null) {
+            return "the current table cannot hold keys";
+        }
+        (&mut TomlTable)? target = TomlParser.walk(table, key, key.size() - 1, true);
+        if (target == null) {
+            return "the key `${TomlWriter.path(key)}` goes through a value that is not a table";
+        }
+        String last = key.get(key.size() - 1);
+        if (target.contains(&last)) {
+            return "the key `${target.qualify(last)}` is defined twice";
+        }
+        if (target.isInline()) {
+            return "an inline table cannot be extended";
+        }
+        target.put(last, value);
+        return null;
+    }
+
+    private static (&mut TomlTable)? walk(
+        &mut TomlTable table,
+        &List<String> path,
+        int count,
+        boolean create
+    ) borrows table {
+        if (count == 0) {
+            return table;
+        }
+        String step = path.get(0);
+        if (!table.contains(&step)) {
+            if (!create) {
+                return null;
+            }
+            table.put(step, TomlValue.Table(new TomlTable(table.qualify(step))));
+        }
+        List<String> rest = new ArrayList<>();
+        for (int i = 1; i < path.size(); i++) {
+            rest.add(path.get(i));
+        }
+        (&mut TomlValue)? value = table.getMut(&step);
+        if (value == null) {
+            return null;
+        }
+        return switch (value) {
+            case Table(TomlTable inner) -> TomlParser.walk(&mut inner, &rest, count - 1, create);
+            case Array(List<TomlValue> items) -> TomlParser.walkLast(&mut items, &rest, count - 1, create);
+            default -> null;
+        };
+    }
+
+    private static (&mut TomlTable)? walkLast(
+        &mut List<TomlValue> items,
+        &List<String> path,
+        int count,
+        boolean create
+    ) borrows items {
+        if (items.isEmpty()) {
+            return null;
+        }
+        (&mut TomlValue) last = items.getMut(items.size() - 1);
+        return switch (last) {
+            case Table(TomlTable inner) -> inner.isInline()
+                ? null
+                : TomlParser.walk(&mut inner, path, count, create);
+            default -> null;
+        };
+    }
+
+    private boolean atEnd() {
+        return this.pos >= this.chars.length;
+    }
+
+    private char peek() {
+        return this.chars[this.pos];
+    }
+
+    private boolean lookingAt(String text) {
+        char[] wanted = text.chars();
+        if (this.pos + wanted.length > this.chars.length) {
+            return false;
+        }
+        for (int i = 0; i < wanted.length; i++) {
+            if (this.chars[this.pos + i] != wanted[i]) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private mut char advance() {
+        char c = this.chars[this.pos];
+        this.pos++;
+        if (c == '\n') {
+            this.line++;
+            this.column = 1;
+        } else {
+            this.column++;
+        }
+        return c;
+    }
+
+    private mut void skip(int count) {
+        for (int i = 0; i < count; i++) {
+            this.advance();
+        }
+    }
+
+    private mut void skipSpaces() {
+        while (!this.atEnd() && (this.peek() == ' ' || this.peek() == '\t')) {
+            this.advance();
+        }
+    }
+
+    private mut void skipNewline() {
+        if (this.lookingAt("\r\n")) {
+            this.skip(2);
+        } else if (this.lookingAt("\n")) {
+            this.advance();
+        }
+    }
+
+    private mut void skipComment() {
+        if (!this.atEnd() && this.peek() == '#') {
+            while (!this.atEnd() && this.peek() != '\n') {
+                this.advance();
+            }
+        }
+    }
+
+    private mut void skipBlankLines() {
+        while (true) {
+            this.skipSpaces();
+            this.skipComment();
+            if (this.atEnd()) {
+                return;
+            }
+            char c = this.peek();
+            if (c != '\n' && c != '\r') {
+                return;
+            }
+            this.advance();
+        }
+    }
+
+    private mut void skipWhitespaceAndComments() {
+        while (!this.atEnd()) {
+            char c = this.peek();
+            if (c == ' ' || c == '\t' || c == '\n' || c == '\r') {
+                this.advance();
+            } else if (c == '#') {
+                this.skipComment();
+            } else {
+                return;
+            }
+        }
+    }
+
+    private mut void endOfLine() throws TomlException {
+        this.skipSpaces();
+        this.skipComment();
+        if (this.atEnd()) {
+            return;
+        }
+        if (this.lookingAt("\r\n") || this.peek() == '\n') {
+            this.skipNewline();
+            return;
+        }
+        throw this.error("expected the end of the line, found `${this.peek()}`");
+    }
+
+    private mut void expect(char wanted, String context) throws TomlException {
+        if (this.atEnd() || this.peek() != wanted) {
+            throw this.error("expected `$wanted` $context");
+        }
+        this.advance();
+    }
+
+    private TomlException error(String message) {
+        return this.errorAt(this.line, this.column, message);
+    }
+
+    private TomlException errorAt(int line, int column, String message) {
+        return new TomlException("${this.file}:$line:$column: $message");
+    }
+
+    private static boolean isBareKeyChar(char c) {
+        return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')
+            || c == '_' || c == '-';
+    }
+}
