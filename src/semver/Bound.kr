@@ -1,0 +1,18 @@
+package krelp.semver;
+
+record Bound(Op op, Version version) {
+    boolean matches(&Version candidate) {
+        int order = candidate.compareTo(&this.version);
+        return switch (this.op) {
+            case EXACT -> order == 0;
+            case GREATER -> order > 0;
+            case GREATER_EQ -> order >= 0;
+            case LESS -> order < 0;
+            case LESS_EQ -> order <= 0;
+        };
+    }
+
+    String toString() {
+        return "${this.op.symbol()}${this.version}";
+    }
+}

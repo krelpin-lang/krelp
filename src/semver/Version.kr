@@ -1,0 +1,136 @@
+package krelp.semver;
+
+record Version(int major, int minor, int patch, String pre) implements Comparable<Version> {
+    static Version of(int major, int minor, int patch) {
+        return new Version(major, minor, patch, "");
+    }
+
+    static Version parse(String text) throws SemverException {
+        String core = text.trim();
+        int plus = core.indexOf("+");
+        if (plus >= 0) {
+            core = core.substring(0, plus);
+        }
+        String pre = "";
+        int dash = core.indexOf("-");
+        if (dash >= 0) {
+            pre = core.substring(dash + 1);
+            core = core.substring(0, dash);
+            if (pre.isEmpty()) {
+                throw new SemverException("`$text` has an empty pre-release tag after `-`");
+            }
+        }
+        String[] parts = core.split(".");
+        if (parts.length != 3) {
+            throw new SemverException(
+                "`$text` is not a version; a version has three numbers, like `1.0.0`"
+            );
+        }
+        return new Version(
+            Version.number(parts[0], text),
+            Version.number(parts[1], text),
+            Version.number(parts[2], text),
+            pre
+        );
+    }
+
+    static int number(String part, String text) throws SemverException {
+        if (part.isEmpty() || part.length() > 9) {
+            throw new SemverException("`$text` has an invalid number `$part`");
+        }
+        for (char c : part.chars()) {
+            if (c < '0' || c > '9') {
+                throw new SemverException("`$text` has an invalid number `$part`");
+            }
+        }
+        if (part.length() > 1 && part.startsWith("0")) {
+            throw new SemverException("`$text` has a number with a leading zero, `$part`");
+        }
+        return int.parse(part);
+    }
+
+    boolean isPrerelease() {
+        return !this.pre.isEmpty();
+    }
+
+    boolean sameRelease(&Version other) {
+        return this.major == other.major && this.minor == other.minor && this.patch == other.patch;
+    }
+
+    int compareTo(&Version other) {
+        if (this.major != other.major) {
+            return this.major < other.major ? -1 : 1;
+        }
+        if (this.minor != other.minor) {
+            return this.minor < other.minor ? -1 : 1;
+        }
+        if (this.patch != other.patch) {
+            return this.patch < other.patch ? -1 : 1;
+        }
+        return Version.comparePre(this.pre, other.pre);
+    }
+
+    boolean equals(&Version other) {
+        return this.compareTo(other) == 0;
+    }
+
+    String toString() {
+        String release = "${this.major}.${this.minor}.${this.patch}";
+        return this.pre.isEmpty() ? release : "$release-${this.pre}";
+    }
+
+    private static int comparePre(String a, String b) {
+        if (a == b) {
+            return 0;
+        }
+        if (a.isEmpty()) {
+            return 1;
+        }
+        if (b.isEmpty()) {
+            return -1;
+        }
+        String[] left = a.split(".");
+        String[] right = b.split(".");
+        int shared = left.length < right.length ? left.length : right.length;
+        for (int i = 0; i < shared; i++) {
+            int order = Version.compareIdentifier(left[i], right[i]);
+            if (order != 0) {
+                return order;
+            }
+        }
+        if (left.length == right.length) {
+            return 0;
+        }
+        return left.length < right.length ? -1 : 1;
+    }
+
+    private static int compareIdentifier(String a, String b) {
+        boolean leftNumeric = Version.isNumeric(a);
+        boolean rightNumeric = Version.isNumeric(b);
+        if (leftNumeric && rightNumeric) {
+            if (a.length() != b.length()) {
+                return a.length() < b.length() ? -1 : 1;
+            }
+            return a.compareTo(&b);
+        }
+        if (leftNumeric) {
+            return -1;
+        }
+        if (rightNumeric) {
+            return 1;
+        }
+        return a.compareTo(&b);
+    }
+
+    private static boolean isNumeric(String text) {
+        if (text.isEmpty()) {
+            return false;
+        }
+        for (char c : text.chars()) {
+            if (c < '0' || c > '9') {
+                return false;
+            }
+        }
+        return true;
+    }
+}

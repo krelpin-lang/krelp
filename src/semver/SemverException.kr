@@ -1,0 +1,7 @@
+package krelp.semver;
+
+class SemverException extends Exception {
+    SemverException(String message) {
+        super(message);
+    }
+}

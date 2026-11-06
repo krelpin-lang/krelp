@@ -1,0 +1,98 @@
+package krelp.semver;
+
+final class Partial {
+    private int major;
+    private int minor;
+    private int patch;
+    private String pre;
+    private boolean wildcard;
+
+    private Partial(int major, int minor, int patch, String pre, boolean wildcard) {
+        this.major = major;
+        this.minor = minor;
+        this.patch = patch;
+        this.pre = pre;
+        this.wildcard = wildcard;
+    }
+
+    static Partial parse(String part, String text) throws SemverException {
+        String core = part;
+        int plus = core.indexOf("+");
+        if (plus >= 0) {
+            core = core.substring(0, plus);
+        }
+        String pre = "";
+        int dash = core.indexOf("-");
+        if (dash >= 0) {
+            pre = core.substring(dash + 1);
+            core = core.substring(0, dash);
+        }
+        String[] parts = core.split(".");
+        if (parts.length > 3) {
+            throw new SemverException("`$text` has a version with more than three numbers");
+        }
+        int[] numbers = {-1, -1, -1};
+        boolean wildcard = false;
+        for (int i = 0; i < parts.length; i++) {
+            String piece = parts[i];
+            if (piece == "*" || piece == "x" || piece == "X") {
+                if (i == 0) {
+                    throw new SemverException("`$text` must start with a number");
+                }
+                wildcard = true;
+            } else if (wildcard) {
+                throw new SemverException("`$text` has a number after a wildcard");
+            } else {
+                numbers[i] = Version.number(piece, text);
+            }
+        }
+        if (!pre.isEmpty() && numbers[2] < 0) {
+            throw new SemverException("`$text` has a pre-release tag on an incomplete version");
+        }
+        return new Partial(numbers[0], numbers[1], numbers[2], pre, wildcard);
+    }
+
+    boolean complete() {
+        return this.patch >= 0;
+    }
+
+    boolean wildcard() {
+        return this.wildcard;
+    }
+
+    Version lower() {
+        return new Version(
+            this.major,
+            this.minor < 0 ? 0 : this.minor,
+            this.patch < 0 ? 0 : this.patch,
+            this.pre
+        );
+    }
+
+    Version bumpLast() {
+        if (this.minor < 0) {
+            return Version.of(this.major + 1, 0, 0);
+        }
+        if (this.patch < 0) {
+            return Version.of(this.major, this.minor + 1, 0);
+        }
+        return Version.of(this.major, this.minor, this.patch + 1);
+    }
+
+    Version caretUpper() {
+        if (this.major > 0 || this.minor < 0) {
+            return Version.of(this.major + 1, 0, 0);
+        }
+        if (this.minor > 0 || this.patch < 0) {
+            return Version.of(0, this.minor + 1, 0);
+        }
+        return Version.of(0, 0, this.patch + 1);
+    }
+
+    Version tildeUpper() {
+        if (this.minor < 0) {
+            return Version.of(this.major + 1, 0, 0);
+        }
+        return Version.of(this.major, this.minor + 1, 0);
+    }
+}

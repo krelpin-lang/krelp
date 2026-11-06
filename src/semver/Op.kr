@@ -1,0 +1,15 @@
+package krelp.semver;
+
+enum Op {
+    EXACT, GREATER, GREATER_EQ, LESS, LESS_EQ;
+
+    String symbol() {
+        return switch (this) {
+            case EXACT -> "=";
+            case GREATER -> ">";
+            case GREATER_EQ -> ">=";
+            case LESS -> "<";
+            case LESS_EQ -> "<=";
+        };
+    }
+}
