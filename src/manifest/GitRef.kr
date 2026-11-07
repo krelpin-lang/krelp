@@ -26,6 +26,7 @@ enum GitRef {
         };
     }
 
+    @Override
     String toString() {
         return switch (this) {
             case DefaultBranch -> "the default branch";

@@ -12,6 +12,7 @@ record Bound(Op op, Version version) {
         };
     }
 
+    @Override
     String toString() {
         return "${this.op.symbol()}${this.version}";
     }

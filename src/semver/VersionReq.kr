@@ -86,6 +86,7 @@ final class VersionReq {
         return this.bounds.isEmpty();
     }
 
+    @Override
     String toString() {
         return this.text;
     }

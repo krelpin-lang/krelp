@@ -57,6 +57,7 @@ record Version(int major, int minor, int patch, String pre) implements Comparabl
         return this.major == other.major && this.minor == other.minor && this.patch == other.patch;
     }
 
+    @Override
     int compareTo(&Version other) {
         if (this.major != other.major) {
             return this.major < other.major ? -1 : 1;
@@ -70,10 +71,12 @@ record Version(int major, int minor, int patch, String pre) implements Comparabl
         return Version.comparePre(this.pre, other.pre);
     }
 
+    @Override
     boolean equals(&Version other) {
         return this.compareTo(other) == 0;
     }
 
+    @Override
     String toString() {
         String release = "${this.major}.${this.minor}.${this.patch}";
         return this.pre.isEmpty() ? release : "$release-${this.pre}";

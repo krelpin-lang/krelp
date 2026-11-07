@@ -47,6 +47,7 @@ record Node(
         return names;
     }
 
+    @Override
     String toString() {
         return "${this.name} v${this.version}";
     }
