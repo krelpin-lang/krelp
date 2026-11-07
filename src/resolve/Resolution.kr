@@ -14,7 +14,7 @@ import std.util.ArrayList;
 import std.util.List;
 
 final class Resolution {
-    private List<Node> nodes;
+    private final List<Node> nodes;
 
     Resolution(Node root) {
         this.nodes = new ArrayList<>();

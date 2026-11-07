@@ -11,10 +11,10 @@ import krelp.util.KrelpException;
 import krelp.util.Shell;
 
 final class Krelp {
-    private Shell shell;
-    private String compiler;
-    private String workingDirectory;
-    private Sources sources;
+    private final Shell shell;
+    private final String compiler;
+    private final String workingDirectory;
+    private final Sources sources;
 
     Krelp(Shell shell, String compiler, String registry, Home home, String workingDirectory) {
         this.shell = shell;

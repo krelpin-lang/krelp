@@ -15,13 +15,13 @@ import std.util.ArrayList;
 import std.util.List;
 
 final class Resolver borrows sources {
-    private static int ROUNDS = 32;
+    private static final int ROUNDS = 32;
 
-    private &mut Sources sources;
-    private Shell shell;
-    private Lockfile? lock;
-    private boolean unlockAll;
-    private List<String> unlocked;
+    private final &mut Sources sources;
+    private final Shell shell;
+    private final Lockfile? lock;
+    private final boolean unlockAll;
+    private final List<String> unlocked;
     private List<Demand> hints;
 
     Resolver(&mut Sources sources, Shell shell, Lockfile? lock, boolean unlockAll, &List<String> unlocked)

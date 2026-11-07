@@ -11,11 +11,11 @@ import std.util.ArrayList;
 import std.util.List;
 
 final class GitCache {
-    private static String MARKER = ".krelp-ok";
+    private static final String MARKER = ".krelp-ok";
 
-    private Home home;
-    private Shell shell;
-    private List<String> fetched;
+    private final Home home;
+    private final Shell shell;
+    private final List<String> fetched;
 
     GitCache(Home home, Shell shell) {
         this.home = home;

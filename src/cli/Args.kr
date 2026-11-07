@@ -5,8 +5,8 @@ import std.util.ArrayList;
 import std.util.List;
 
 final class Args {
-    private List<String> items;
-    private List<String> passthrough;
+    private final List<String> items;
+    private final List<String> passthrough;
 
     Args(&String[] argv, int start) {
         this.items = new ArrayList<>();

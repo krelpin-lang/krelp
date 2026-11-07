@@ -15,10 +15,10 @@ import std.util.ArrayList;
 import std.util.List;
 
 final class Builder {
-    private Project project;
-    private Profile profile;
-    private Shell shell;
-    private String compiler;
+    private final Project project;
+    private final Profile profile;
+    private final Shell shell;
+    private final String compiler;
 
     Builder(Project project, Profile profile, &Krelp krelp) {
         this.project = project;

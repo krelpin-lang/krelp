@@ -3,8 +3,8 @@ package krelp.source;
 import krelp.util.Shell;
 
 final class Sources {
-    private Index index;
-    private GitCache git;
+    private final Index index;
+    private final GitCache git;
 
     Sources(String registry, Home home, Shell shell) {
         this.index = new Index(registry, home, shell);

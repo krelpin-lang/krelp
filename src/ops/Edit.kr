@@ -9,10 +9,10 @@ import std.io.IOException;
 import std.util.List;
 
 final class Edit borrows krelp {
-    private &mut Krelp krelp;
-    private Manifest manifest;
-    private String original;
-    private ManifestEditor editor;
+    private final &mut Krelp krelp;
+    private final Manifest manifest;
+    private final String original;
+    private final ManifestEditor editor;
 
     Edit(&mut Krelp krelp) keeps krelp throws KrelpException {
         Manifest manifest = krelp.manifest();

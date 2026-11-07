@@ -15,11 +15,11 @@ import std.util.ArrayList;
 import std.util.List;
 
 final class Index {
-    public static String DEFAULT = "https://github.com/krelpin-lang/registry.git";
+    public static final String DEFAULT = "https://github.com/krelpin-lang/registry.git";
 
-    private String url;
-    private Repository repository;
-    private Shell shell;
+    private final String url;
+    private final Repository repository;
+    private final Shell shell;
     private boolean fresh;
 
     Index(String url, Home home, Shell shell) {

@@ -16,9 +16,9 @@ import std.util.ArrayList;
 import std.util.List;
 
 final class Publish borrows krelp {
-    private &mut Krelp krelp;
-    private boolean dryRun;
-    private boolean allowDirty;
+    private final &mut Krelp krelp;
+    private final boolean dryRun;
+    private final boolean allowDirty;
 
     Publish(&mut Krelp krelp, boolean dryRun, boolean allowDirty) keeps krelp {
         this.krelp = krelp;

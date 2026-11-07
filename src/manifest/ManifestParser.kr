@@ -13,8 +13,8 @@ import std.util.ArrayList;
 import std.util.List;
 
 final class ManifestParser {
-    private String file;
-    private Shell shell;
+    private final String file;
+    private final Shell shell;
 
     ManifestParser(String file, Shell shell) {
         this.file = file;

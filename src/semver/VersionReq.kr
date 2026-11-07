@@ -4,8 +4,8 @@ import std.util.ArrayList;
 import std.util.List;
 
 final class VersionReq {
-    private String text;
-    private List<Bound> bounds;
+    private final String text;
+    private final List<Bound> bounds;
 
     private VersionReq(String text, List<Bound> bounds) {
         this.text = text;

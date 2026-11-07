@@ -7,8 +7,8 @@ import std.util.Map;
 
 final class TomlTable {
     private String path;
-    private List<String> order;
-    private Map<String, TomlValue> values;
+    private final List<String> order;
+    private final Map<String, TomlValue> values;
     private boolean defined;
     private boolean inline;
 

@@ -13,7 +13,7 @@ import std.util.ArrayList;
 import std.util.List;
 
 record Lockfile(List<LockedPackage> packages) {
-    public static String FILE = "krelp.lock";
+    public static final String FILE = "krelp.lock";
 
     static Lockfile? read(String dir) throws KrelpException {
         String file = Path.join(dir, Lockfile.FILE);

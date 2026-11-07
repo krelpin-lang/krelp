@@ -9,9 +9,9 @@ import std.util.ArrayList;
 import std.util.List;
 
 final class Requirements {
-    private String name;
-    private SourceId source;
-    private List<Demand> demands;
+    private final String name;
+    private final SourceId source;
+    private final List<Demand> demands;
 
     private Requirements(String name, SourceId source, List<Demand> demands) {
         this.name = name;

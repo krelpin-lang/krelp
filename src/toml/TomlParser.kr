@@ -4,12 +4,12 @@ import std.util.ArrayList;
 import std.util.List;
 
 final class TomlParser {
-    private String file;
-    private char[] chars;
+    private final String file;
+    private final char[] chars;
     private int pos;
     private int line;
     private int column;
-    private TomlTable root;
+    private final TomlTable root;
     private List<String> current;
 
     private TomlParser(String text, String file) {

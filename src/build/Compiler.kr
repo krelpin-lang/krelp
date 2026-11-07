@@ -7,11 +7,11 @@ import std.process.Command;
 import std.util.List;
 
 final class Compiler {
-    private String program;
-    private String crateName;
-    private String input;
-    private String? edition;
-    private List<Library> libraries;
+    private final String program;
+    private final String crateName;
+    private final String input;
+    private final String? edition;
+    private final List<Library> libraries;
 
     Compiler(String program, String crateName, String input, String? edition, List<Library> libraries) {
         this.program = program;

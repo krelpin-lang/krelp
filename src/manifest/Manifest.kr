@@ -19,7 +19,7 @@ record Manifest(
     List<String> authors,
     List<Dependency> dependencies
 ) {
-    public static String FILE = "krelp.toml";
+    public static final String FILE = "krelp.toml";
 
     static Manifest find(String start, Shell shell) throws KrelpException {
         String dir = start;
