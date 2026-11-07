@@ -3,7 +3,7 @@ package krelp.source;
 import krelp.util.KrelpException;
 import std.io.IOException;
 import std.process.Command;
-import std.process.Output;
+import std.process.Command.Output;
 
 record Repository(String dir) {
     static Repository clone(String url, String into, String... flags) throws KrelpException {
