@@ -30,6 +30,19 @@ record Repository(String dir) {
         }
     }
 
+    static boolean isCommitHash(&String text) {
+        if (text.length() != 40 && text.length() != 64) {
+            return false;
+        }
+        for (int i = 0; i < text.length(); i++) {
+            char c = text.charAt(i);
+            if (!(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f')) {
+                return false;
+            }
+        }
+        return true;
+    }
+
     boolean isWorkTree() {
         return this.tryRun("rev-parse", "--is-inside-work-tree") != null;
     }

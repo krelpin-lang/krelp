@@ -32,11 +32,18 @@ record IndexEntry(String name, Version version, String git, String rev, List<Dep
                 }
             }
         }
+        String rev = table.requireString("rev");
+        if (!Repository.isCommitHash(&rev)) {
+            throw new KrelpException(
+                "$file: `$name` v$version has `rev = \"$rev\"`, which is not a full commit hash",
+                "an index entry must pin the exact commit, because a branch or tag can be moved to other code"
+            );
+        }
         return new IndexEntry(
             name,
             version,
             table.requireString("git"),
-            table.requireString("rev"),
+            rev,
             dependencies,
             table.bool("yanked", false)
         );

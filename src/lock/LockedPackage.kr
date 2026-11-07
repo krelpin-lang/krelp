@@ -2,6 +2,7 @@ package krelp.lock;
 
 import krelp.semver.SemverException;
 import krelp.semver.Version;
+import krelp.source.Repository;
 import krelp.source.SourceId;
 import krelp.toml.TomlException;
 import krelp.toml.TomlTable;
@@ -18,11 +19,18 @@ record LockedPackage(String name, Version version, SourceId source, String? comm
         } catch (SemverException e) {
             throw new KrelpException("$file: `$name`: ${e.getMessage() ?: ""}");
         }
+        String? commit = table.string("commit");
+        if (commit != null && !Repository.isCommitHash(&commit)) {
+            throw new KrelpException(
+                "$file: `$name` has `commit = \"$commit\"`, which is not a full commit hash",
+                "delete it to have krelp write a new one"
+            );
+        }
         return new LockedPackage(
             name,
             version,
             SourceId.parse(table.requireString("source")),
-            table.string("commit"),
+            commit,
             table.strings("dependencies")
         );
     }

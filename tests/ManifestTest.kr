@@ -93,7 +93,7 @@ class ManifestTest {
         String text = "# This file is written by krelp. Do not edit it by hand.\n"
             + "version = 1\n\n"
             + "[[package]]\nname = \"json\"\nversion = \"1.2.3\"\n"
-            + "source = \"registry+https://example.com/index.git\"\ncommit = \"abc\"\n\n"
+            + "source = \"registry+https://example.com/index.git\"\ncommit = \"0123456789abcdef0123456789abcdef01234567\"\n\n"
             + "[[package]]\nname = \"util\"\nversion = \"0.1.0\"\nsource = \"path+../util\"\n"
             + "dependencies = [\"json\"]\n";
         try {
@@ -104,6 +104,18 @@ class ManifestTest {
             Check.that(lock.find(&"tide") == null, "tide not to be locked");
         } catch (KrelpException e) {
             throw new IllegalStateException(e.getMessage() ?: "");
+        }
+    }
+
+    @Test
+    static void lockfilesRejectMovableCommits() {
+        String text = "version = 1\n\n[[package]]\nname = \"json\"\nversion = \"1.2.3\"\n"
+            + "source = \"registry+https://example.com/index.git\"\ncommit = \"v1.2.3\"\n";
+        try {
+            Lockfile.parse(text, "krelp.lock");
+            Check.that(false, "a tag in `commit` to be rejected");
+        } catch (KrelpException e) {
+            Check.equal(e.getMessage() ?: "", "krelp.lock: `json` has `commit = \"v1.2.3\"`, which is not a full commit hash");
         }
     }
 
